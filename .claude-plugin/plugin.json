@@ -1,0 +1,19 @@
+{
+  "name": "deepseek-supervisor",
+  "version": "0.4.0",
+  "description": "\"You should know\" for Claude Code on a third-party model such as DeepSeek: every few steps a side pass reviews the work and tells the model, and the person, what it notices",
+  "author": {
+    "name": "LACAN-1"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "you-should-know",
+    "deepseek",
+    "review"
+  ],
+  "homepage": "https://github.com/LACAN-1/deepseek-supervisor",
+  "repository": "https://github.com/LACAN-1/deepseek-supervisor"
+}

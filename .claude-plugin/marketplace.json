@@ -1,0 +1,16 @@
+{
+  "name": "deepseek-supervisor",
+  "owner": {
+    "name": "LACAN-1"
+  },
+  "metadata": {
+    "description": "deepseek-supervisor: a \"You should know\"-style reviewer for Claude Code on third-party models"
+  },
+  "plugins": [
+    {
+      "name": "deepseek-supervisor",
+      "source": "./",
+      "description": "\"You should know\" for Claude Code on a third-party model such as DeepSeek: every few steps a side pass reviews the work and tells the model, and the person, what it notices"
+    }
+  ]
+}
