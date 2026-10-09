@@ -52,8 +52,10 @@ const MENTIONS_CHECK = /\b(?:tests?|specs?|check|lint|build|ci|verify)\b/i
 const UTILITY = /^(?:ls|cat|less|more|head|tail|wc|grep|egrep|rg|ag|find|fd|tree|file|stat|du|echo|printf|sed|awk|cut|tr|sort|uniq|jq|diff|cmp|cd|pwd|git|mkdir|touch|rm|rmdir|mv|cp|ln|chmod|which|type|tee|xargs|true|false|test|\[|curl|wget|tar|pip3?)$/
 
 // How a run says it failed, whatever pipe hid its exit code.
+// Case matters: bun's summary of a passing run ends " 0 fail", and a diff may hold
+// `fail=1`; read case-blind, each made a passing run a failed one (2026-10-09).
 const FAILED =
-  /\bFAIL(?:ED)?\b|\b[1-9]\d* (?:failed|failing|errors?)\b|\berror TS\d+|\berror\[E\d+\]|\bexit(?:=| code:? ?)[1-9]|Traceback \(most recent call last\)|\bAssertionError\b|\bcommand not found\b|^\s*✖ [1-9]/im
+  /\bFAIL(?:ED)?\b|^\(fail\)|^Failed\b|\b[1-9]\d* (?:[Ff]ail(?:ed|ing|ures?)?|[Ee]rrors?)\b|\berror TS\d+|\berror\[E\d+\]|\b[Ee]xit(?:=| code:? ?)[1-9]|Traceback \(most recent call last\)|\bAssertionError\b|\bcommand not found\b|^\s*✖ [1-9]/m
 // The line that says what went wrong, most specific first: a Python error's last
 // line, an assertion's expected and received, else the line that says it failed.
 const SPECIFIC = /\b\w*(?:Error|Exception)\b[:\s]|\b(?:Expected|Received|expected|received|got)\b|!=|\bpanicked at\b/
@@ -71,7 +73,7 @@ const CHECK_PASS = new RegExp(
 // tests pass, run …") or that it could not be ("I cannot provide evidence that it passes").
 // So is what held before: "the test passed before the edit" says nothing of now.
 const NOT_A_CLAIM =
-  /\b(?:will|going to|let me|let's|i'll|next|then i|should|need to|try(?:ing)? to|once|after (?:i|we)|if|not|cannot|whether|no longer|fail(?:s|ed|ing|ure)?|until|before|earlier|previously|prior|originally|at first|used to|unverified|unchecked|untested|unconfirmed|claimed|(?:i|you) (?:said|stated|wrote))\b|\bwithout (?:actually |really |first )?(?:run|runn|check|test|verif)\w*|\bto (?:verify|confirm|check|ensure|make sure)\b|\b(?:can|could|may|might) (?:verify|confirm|check)\b|n['’]t\b|(?:要|可以|请)(?:验证|确认|检查)|是否|将|稍后|接下来|然后|待会|需要|准备|计划|打算|让我|我来|下一步|如果|等到|等待|没|未|不|失败|报错|之前|此前|原先|先前|原来|改动前|修改前|未验证|未经验证|没有验证/i
+  /\b(?:will|going to|let me|let's|i'll|next|then i|should|need to|try(?:ing)? to|once|after (?:i|we)|if|not|cannot|whether|no longer|fail(?:s|ed|ing|ure)?|until|before|earlier|previously|prior|originally|at first|used to|unverified|unchecked|untested|unconfirmed|claimed|(?:i|you) (?:said|stated|wrote))\b|\bwithout (?:actually |really |first )?(?:run|runn|check|test|verif)\w*|\bto (?:verify|confirm|check|ensure|make sure)\b|\b(?:can|could|may|might) (?:verify|confirm|check)\b|n['’]t\b|(?:要|可以|请)(?:验证|确认|检查)|是否|将|稍后|接下来|然后|待会|需要|准备|计划|打算|让我|我来|下一步|如果|等到|等待|没|未|不|失败|报错|之前|此前|原先|先前|原来|改动前|修改前|未验证|未经验证|没有验证|之后|以后|后[，,]?再|才(?:算|能|会|可以)|即(?:可|能|通过)|就(?:能|会)|比如|例如/i
 // An answer that owns up to a failure: whatever else it says, it said that.
 const OWNS_UP = /\bfail(?:s|ed|ing|ure|ures)?\b|\berrors?\b|\bbroken\b|\bbreaks?\b|\bnot (?:yet )?pass|\b(?:doesn|don|isn|aren|didn)'?t (?:pass|work)|\bstill (?:red|failing)|\bcrash|失败|报错|错误|未通过|没通过|不通过|没有通过|还有问题|仍有问题|跑不过/i
 // Saying a file was changed.
@@ -130,6 +132,8 @@ export type Evidence = {
   changes: Change[]
   /** Test files a command removed. */
   removed: { at: number; path: string }[]
+  /** Files this session made with Write over nothing it knew of: its own scratch, by name. */
+  created: Set<string>
   /** Positions where a subagent ran: what it ran is not in this transcript. */
   blind: number[]
   /** Every basename any tool call or result names. */
@@ -170,12 +174,14 @@ const signatureOf = (out: string) =>
 
 // The person's rows, not the tool results, the notes this plugin wrote, or the
 // engine's own reminders.
-const isPerson = (r: Row) => r.role === 'user' && r.text.trim() !== '' && !r.text.includes('[deepseek-supervisor]') && !/^\s*<(?:system-reminder|command-|local-command)/.test(r.text)
+// Another session's message is not the person asking (2026-10-09: a teammate's "run the
+// checks" held the answer to it).
+const isPerson = (r: Row) => r.role === 'user' && r.text.trim() !== '' && !r.text.includes('[deepseek-supervisor]') && !/^\s*<(?:system-reminder|command-|local-command|teammate-message)|^\s*Another Claude session sent a message/.test(r.text)
 
 // The session's main loop as a sequence of tool calls, each with its position; a
 // row's text is said before the row's own tool calls run.
 export const evidenceOf = (rows: readonly Row[]): Evidence => {
-  const ev: Evidence = { runs: [], bash: [], edits: [], misses: [], reads: [], changes: [], removed: [], blind: [], named: new Set(), saidAt: new Map(), prompts: [], end: 0, mentioned: false, refused: [] }
+  const ev: Evidence = { runs: [], bash: [], edits: [], misses: [], reads: [], changes: [], removed: [], created: new Set(), blind: [], named: new Set(), saidAt: new Map(), prompts: [], end: 0, mentioned: false, refused: [] }
   // The last text known of each file, so a Write can be held against what it replaced.
   const known = new Map<string, string>()
   let at = 0
@@ -209,6 +215,7 @@ export const evidenceOf = (rows: readonly Row[]): Evidence => {
                   ? [{ old: known.get(path) ?? '', new: str(input, 'content') }]
                   : []
           for (const h of hunks) ev.changes.push({ at, path, ...h })
+          if (u.tool === 'Write' && !known.has(path)) ev.created.add(base(path))
           if (u.tool === 'Write') known.set(path, str(input, 'content'))
         }
       }
@@ -226,7 +233,11 @@ export const evidenceOf = (rows: readonly Row[]): Evidence => {
         // A test file removed from the shell.
         for (const p of pieces(command)) {
           const m = /^(?:git\s+)?rm\s+(.+)$/.exec(p)
-          for (const arg of m?.[1]?.split(/\s+/) ?? []) if (TEST_FILE.test(arg.replace(/["']/g, ''))) ev.removed.push({ at, path: arg.replace(/["']/g, '') })
+          // Not a pattern or a variable (a scratch copy), nor a file this session wrote itself.
+          for (const arg of m?.[1]?.split(/\s+/) ?? []) {
+            const path = arg.replace(/["']/g, '')
+            if (TEST_FILE.test(path) && !/[$*?]/.test(path) && !ev.created.has(base(path))) ev.removed.push({ at, path })
+          }
         }
       }
       at += 1

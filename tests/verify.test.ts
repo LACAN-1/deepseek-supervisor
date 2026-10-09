@@ -327,6 +327,15 @@ test('an image is raised when named, not when the answer only speaks of a pictur
   expect(await issues($)).not.toContain('never opened')
 })
 
+test('saying where an image went is not saying what it shows', async ($, on) => {
+  const made = { tool_use_id: 'p', tool: 'Bash', input: { command: 'python3 cover.py' }, text: 'saved cover3.png' }
+  const w = world(on, [{ role: 'user', text: 'redo the cover', toolUses: [] }, { role: 'assistant', text: '改好了，`抖音5/cover3.png` 已更新。', toolUses: [made] }])
+  await start($)
+  await steps($, 3)
+  await w.clock.advance(10)
+  expect(await issues($)).not.toContain('never opened')
+})
+
 test('with no copy, the verifier is told so and nothing that writes runs in the real workspace', async ($, on) => {
   const w = world(on, TOTAL_CLAIMED)
   w.state.copyFails = true

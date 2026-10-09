@@ -336,11 +336,13 @@ const verify = async ($: EngineInterface, input: VerifyInput): Promise<VerifyRes
 }
 
 // A rule, not a model: an image made and never opened since, that the model has
-// just named. Speaking of "the chart" without a name no longer counts: 图 alone
-// tied a claim about an image it had read to every other one unopened (2026-10-09).
+// just named and said what it shows. Speaking of "the chart" without a name no longer
+// counts: 图 alone tied a claim about an image it had read to every other one unopened;
+// nor does saying where a file went ("cover3.png 已更新") (2026-10-09).
+const SHOWS = /显示|看到|看着|看过|看起来|画面|图里|图中|图上|上面(?:是|有)|颜色|配色|位置|居中|对齐|清晰|正确|没问题|无误|\b(?:shows?|showing|looks?|visible|appears?|displays?|depicts?|correct(?:ly)?|renders? (?:fine|correctly|well))\b/i
 const unopenedClaimed = (facts: Facts, claims: readonly string[]) =>
   facts.unopened
-    .map(path => [path, claims.find(c => c.includes(base(path)))] as const)
+    .map(path => [path, claims.find(c => c.includes(base(path)) && SHOWS.test(c))] as const)
     .filter((x): x is readonly [string, string] => x[1] !== undefined)
 
 // The model's own word that it told the person: `[ysk#3 told]`, `[ysk#3 refuted: …]`.

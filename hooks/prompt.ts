@@ -100,6 +100,8 @@ export const factsOf = (rows: readonly Row[]): Facts => {
     if (u.tool === 'Grep' || u.tool === 'Glob' || (u.tool === 'Bash' && typeof input.command === 'string' && onlyReads(input.command))) return
     const said = out.split('\n').filter(l => WROTE.test(l)).join('\n')
     for (const m of `${leaves(input).join(' ')} ${said}`.matchAll(IMAGE)) {
+      // A loop's `p$n.png` names no one file.
+      if (m[0].includes('$')) continue
       const was = seen.get(base(m[0]))
       seen.set(base(m[0]), { path: m[0], at, read: was?.read ?? -1 })
     }
