@@ -20,6 +20,10 @@ const CHECK =
   /^(?:pytest|py\.test|unittest|nose2|tox|nox|jest|vitest|mocha|ava|rspec|phpunit|ctest|tsc|mypy|pyright|ruff|flake8|pylint|eslint|go (?:test|build|vet)|cargo (?:test|build|check|clippy)|(?:npm|pnpm|yarn|bun) (?:run )?(?:test|build|lint|check|typecheck)|deno test|bun test|node --test|dotnet (?:test|build)|swift (?:test|build)|mvn|gradle|\.\/gradlew|make|bazel test|claude plugin test|python3?(?:\.\d+)?(?:\s+-[A-Za-z]+)*\s+(?:[\w./-]*\/)?(?:test_[\w-]*|[\w-]*_test|tests?)\.py|(?:(?:ba)?sh\s+|\.\/)[\w./-]*(?:run[_-]?)?tests?[\w-]*\.sh)(?=\s|$)/
 const pieces = (command: string) => command.split(/&&|\|\||[;|\n]/).map(p => p.trim().replace(RUNNER, ''))
 export const isCheckCommand = (command: string) => pieces(command).some(p => CHECK.test(p))
+// Tests run from code given inline, `python3 -c "…unittest.main()…"` or a heredoc that loads
+// the test cases and runs them (live, round 5). Calling the functions by hand is not that.
+const INLINE_TESTS = /^\s*(?:cd\s+[^\n;&|]+&&\s*)?python3?(?:\.\d+)?(?:\s+-[A-Za-z]+)*\s+(?:-c\b|-?\s*<<)[\s\S]*?\b(?:unittest\.main|TextTestRunner|pytest\.main)\s*\(/
+const runsTests = (command: string) => isCheckCommand(command) || INLINE_TESTS.test(command)
 
 // A command that never ran: refused by the person's permissions or a hook. It is no
 // evidence of anything, and its message often echoes the command itself.
@@ -189,7 +193,7 @@ export const evidenceOf = (rows: readonly Row[]): Evidence => {
         }
       }
       if (u.tool === 'Agent' || u.tool === 'Task') ev.blind.push(at)
-      if (u.tool === 'Bash' && failed && DENIED.test(u.text ?? '') && isCheckCommand(str(input, 'command')))
+      if (u.tool === 'Bash' && failed && DENIED.test(u.text ?? '') && runsTests(str(input, 'command')))
         ev.refused.push({ at, command: clip(squash(str(input, 'command')), 120) })
       if (u.tool === 'Bash' && !(failed && DENIED.test(u.text ?? ''))) {
         const command = str(input, 'command')
@@ -197,7 +201,7 @@ export const evidenceOf = (rows: readonly Row[]): Evidence => {
         const ok = !failed && !FAILED.test(out)
         ev.bash.push({ at, key: keyOf(command), ok, sig: ok ? '' : signatureOf(out), text: clip(out, 4000) })
         // The line a note shows is the one that says what failed, not "Exit code 1".
-        if (isCheckCommand(command) && !MISSING.test(out)) ev.runs.push({ at, command: clip(squash(command), 200), ok, line: ok ? '' : clip(signatureOf(out), 160), text: ok ? '' : clip(out, 4000) })
+        if (runsTests(command) && !MISSING.test(out)) ev.runs.push({ at, command: clip(squash(command), 200), ok, line: ok ? '' : clip(signatureOf(out), 160), text: ok ? '' : clip(out, 4000) })
         // A test file removed from the shell.
         for (const p of pieces(command)) {
           const m = /^(?:git\s+)?rm\s+(.+)$/.exec(p)
