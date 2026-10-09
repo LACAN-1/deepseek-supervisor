@@ -25,29 +25,30 @@ Code reads the session's own tool calls (what ran, in what order, how it ended) 
 | **stuck** | the same command failed 3 times in a row with the same error (`AssertionError: 5 != 6`), whatever was edited in between | it passes, or its error changes |
 | **edit-miss** | two edits in a row to one file failed because the text to replace is not in it | the file is read again, or an edit goes through |
 | **weakened-test** | an edit to a test file added a skip, removed the assertions, put in one that cannot fail, set an expected value to what the failing run printed, or a command removed a test file. Not when you said the tests may change ("the test is wrong, update it"), and not for a test the model wrote this session | the model tells you (`[ysk#N told]`) |
-| **ignored-constraint** | you said "don't modify config.py" (or 不要改 config.py, or a folder: `vendor/`) and an edit changed it after you said so | the model tells you |
-| **failed-check**, **stale-check**, **no-check** | the model says the tests, the build or a check pass, and the last such run failed, or passed before a later edit to code, or none ran | a check passes after the last edit to code |
+| **ignored-constraint** | you said "don't modify config.py" (or 不要改 config.py, or a folder: `vendor/`) and an edit changed it after you said so, before you asked for it to change ("now update config.py") | the model tells you |
+| **failed-check**, **stale-check**, **no-check** | the model says the tests, the build or a check pass (or how they came out), and the last such run failed, or passed before a later edit to code, or none ran | a check passes after the last edit to code; no-check, once any check has run (what it showed is then the other rules' to hold) |
 | **untouched** | it says it changed a file that no tool call touched or named | a tool call names it |
 | **unopened image** | it says something about an image it made and never opened | it opens the image |
 
-A test command is known by the head of each piece of the command line, interpreter flags and wrappers taken off (`python3 -I -m unittest`, `uv run pytest`, `npm test`, `cargo test`, `tsc`, `./run_tests.sh`), so `grep unittest a.py` is no run. A command your permissions refused ran nothing, and a runner that is not installed (`No module named pytest`) ran no checks. A claim is held against what had happened when it was said; plans, hopes, honest failures and what held before ("I will make the tests pass", "two tests fail", "it passed before the edit", 测试还没通过) are not claims.
+A test command is known by the head of each piece of the command line, interpreter flags and wrappers taken off (`python3 -I -m unittest`, `uv run pytest`, `npm test`, `cargo test`, `tsc`, `./run_tests.sh`), so `grep unittest a.py` is no run. A command your permissions refused ran nothing, and a runner that is not installed (`No module named pytest`) ran no checks. A claim is held against what had happened when it was said; plans, hopes, honest failures, what held before and reading the code ("I will make the tests pass", "two tests fail", "it passed before the edit", 测试还没通过, 检查过了，没问题) are not claims that a check passed.
 
 ### 2. Before the turn ends: the answer held to the record
 
-When the model is about to hand you its answer, the same rules hold the answer to the record, plus one more:
+When the model is about to hand you its answer, the same rules hold the answer to the record, plus two more:
 
 | Rule | Raised when | Closes when |
 |---|---|---|
 | **unreported-failure** | the last check run this turn failed, nothing passed since, and the answer does not say so | a check passes after the last edit, or the model tells you |
+| **skipped-check** | you asked for the checks to be run ("run the tests", 跑一下测试; not "don't run the tests"), none ran this turn, and the answer does not say so. Attempts your permissions refused are named | a check runs, or the model tells you |
 
-If anything raised this turn is still open, **the turn does not end**: the model gets the items and goes on, once per prompt of yours, so the check never keeps a session going by itself. It is asked to write its whole answer again with the items folded in, since you may read only its last message. Circles and stale edits do not hold a turn; a claim about the machine ("pytest isn't installed") does not either.
+If anything raised this turn is still open, **the turn does not end**: the model gets the items and goes on, at most twice per prompt of yours and the second time only with what is new, so the check never keeps a session going by itself. It is asked to write its whole answer again with the items folded in, since you may read only its last message. Circles and stale edits do not hold a turn; a claim about the machine ("pytest isn't installed") does not either.
 
 ### 3. The verifier: a second, stronger model that runs things
 
 A short loop the plugin runs itself: a model proposes commands, they run in a throwaway copy of your workspace, their output goes back, for at most 6 rounds of at most 3 commands of 60 s each. It does two things.
 
 - **It checks claims** a command can show false ("the total is 59.75", "fixed"), at most 3 per check. A *false* verdict must carry the command it ran and the output that contradicts the claim; one without them is dropped. Claims the record already settles, either way, are not handed to it, and neither is a claim said before a later edit to code.
-- **It reviews the turn's change.** At the end of a turn that changed code, it reads the change against your request and looks for one defect a command can show: an input the request covers that gives a wrong result or a crash. It must quote a line the turn changed, and give the command and the text its output holds while the defect is there. In a copy, it must run that command and see that text, or the defect is dropped. With no copy (see below), the model is asked to run the command itself; its own run decides: the text there means the defect is real, its absence that the reviewer was wrong.
+- **It reviews the turn's change.** At the end of a turn that changed code, it reads the change against your request and looks for one defect a command can show: an input the request covers that gives a wrong result or a crash. It must quote a line the turn changed, and give the command and the text its output holds while the defect is there. In a copy, it must run that command and see that text, or the defect is dropped. With no copy (see below), the model is asked to run the command itself; its own run decides: the text there means the defect is real, its absence that the reviewer was wrong. A change it has read to the end is not read again.
 
 **Which model.** By default the verifier asks for `opus`. DeepSeek's endpoint serves Claude-style names by family: `opus` gets its Pro model, `sonnet` and `haiku` its Flash one. So the work of a Flash session is checked by Pro. Set `verifier_model` to any model your endpoint takes; if the endpoint refuses it, `sonnet` is used.
 
@@ -59,13 +60,15 @@ A short loop the plugin runs itself: a model proposes commands, they run in a th
 
 Not by the model saying so.
 
-- **fixed**: the record shows what closes it (table above), or its recheck, rerun in a fresh copy at every later check, exits 0.
+- **fixed**: the record shows what closes it (table above), or its recheck, rerun in a fresh copy at every later check, exits 0. With no copy, an item the verifier raised about a claim can also be closed by its next reading of the code: a judgement, not an exit code.
 - **told**: the model told you about it, writing `[ysk#3 told]`.
 - **refuted**: the model says the check was wrong, `[ysk#3 refuted: why]`; or, for a suspected defect, its own run of the reviewer's command did not show it.
 
 ## Safety
 
 The note says it is what a check observed, not an instruction from you, and that it authorizes nothing beyond what you asked for: it carries command output from a project that may hold anything. Control characters and anything shaped like the engine's own tags (`<system-reminder>`) are stripped from what it quotes.
+
+With no copy, the reviewer's command goes to the model, which runs it under your permissions. So it must be one import-and-print line (`python3 -c "from shop import average; print(average([]))"`), one script of the workspace, or the project's checks; it may not import `os`, `sys`, `subprocess`, `socket` and the like, run another program, reach the network, write, or read the environment. Any other is not passed on.
 
 Command output goes to the verifier's endpoint, a third party. A command that reads `~/.ssh`, `~/.aws`, `.env`, a `$…KEY`/`$…TOKEN` variable, or dumps the environment (`env`, `printenv`) is refused, in the copy too; keys and tokens a command prints anyway (`sk-…`, `ghp_…`, `AKIA…`, private keys, `password=…`) are cut out before the output leaves the machine.
 
@@ -91,9 +94,15 @@ Real Claude Code 2.1.295 sessions (`claude -p`) with the plugin loaded, 2026-10-
 
 The worker changed it to `return sum(prices) / len(prices) if prices else 0` and said what it chose for an empty cart.
 
-AB_RESULTS
+**Measured, with the plugin and without** (every round in [eval/README.md](eval/README.md)). No DeepSeek key was at hand, so these runs used a stand-in for a weak model on Anthropic's endpoint: Claude Haiku 4.5, told to code in a hurry (the shortest code, no guards, no re-runs), with the verifier on Claude Haiku. 105 runs per arm over four rounds, scored by code; the plugin was fixed between rounds. The harness let the worker run `python3` but not `python`, and it tried `python` first in most runs, so it often could not run the tests its usual way: the moment this version is built for.
 
-**What the live runs found wrong with the checks themselves**, each now a test marked `live:` in `tests/`: a runner with interpreter flags (`python3 -I -m unittest`) not taken for a run; a command the permissions refused, and a missing runner (`No module named pytest`), taken for failed runs; a model revising a test it had just written taken for bending one; "it passed before the edit" and "I claimed the tests pass without running them" taken for claims; a description of NOTES.md ("how to verify everything works") taken for a pass claim; a held turn whose last message lost the original answer; the verifier judging claims about the machine, and claims made before the code changed; a person's failing test replaced by the model's own, and tests asked for that never ran, not caught.
+- **Answers that say the tests pass when no test ran:** 21 of 105 without the plugin, 6 of 105 with it, each read by hand (one-sided Fisher test, p ≈ 0.002; matched more loosely and not read by hand, 31 against 17). With it the worker ran the test suite in 26 runs, against 8 without. The 6 it let through each followed a check the model wrote inline, calling the function a test calls; the rules now hold such a check to be no run of the tests.
+- **Pass rates: no difference that can be told from noise.** 92/105 with it, 81/105 without; but in the runs where the plugin said nothing to the model, which are runs without it drawn again, the gap to the off arm was about as large. The scorer reads the files and whether the answer gets the trap right, and a "tests pass" no run backs, if it happens to be true, still passes.
+- **It costs time:** in `claude -p`, where the verifier runs before the turn may end and a held turn goes on, a run took 1.6 to 2.1 times as long, with up to 2 more turns.
+
+So it makes a weak model's answers more honest about what was checked; that it makes the work itself more often right is not shown. The stand-in is not DeepSeek.
+
+**What the live runs found wrong with the checks themselves**, each now a test marked `live:` in `tests/`: a runner with interpreter flags (`python3 -I -m unittest`) not taken for a run; a command the permissions refused, and a missing runner (`No module named pytest`), taken for failed runs; a model revising a test it had just written taken for bending one; "it passed before the edit" and "I claimed the tests pass without running them" taken for claims; a description of NOTES.md ("how to verify everything works") taken for a pass claim; a held turn whose last message lost the original answer; the verifier judging claims about the machine, and claims made before the code changed; a person's failing test replaced by the model's own, and tests asked for that never ran, not caught; an answer held for "no check ran" raised again once the run it asked for landed; the same change sent to the reviewer at every hold; tests run from a heredoc not taken for a run, and a check the model wrote inline taken for the project's own runner; a test named as passing ("✓ `test_discount` PASSED") handed to the verifier, which, shown only the commands that failed, said no run had passed; a `find` in a folder whose name held "test" taken for the project's own test runner, which kept "no check ran" quiet.
 
 To measure it on DeepSeek, from a clone (the `on` arm loads the plugin, the `off` arm does not):
 
@@ -158,14 +167,14 @@ The plugin's store is shared by every session on the machine. It keeps the on/of
 
 ## Cost
 
-The rules on the record call no model and cost nothing: a batch's check took 5 to 30 ms in the live runs. The verifier's check is a fresh request with no history: the claims, your prompt, the change, the facts, and the command output so far; it does not re-read the session. In the live runs below, a check of a turn's end took 2 to 18 s and 1 to 5 model calls on Haiku; on a reasoning model it takes longer. During the work the verifier runs at most 8 checks per prompt of yours; each check makes up to 6 model calls (12 if replies are unreadable and retried). Rechecks of open items run commands only.
+The rules on the record call no model and cost nothing: a batch's check took 5 to 30 ms in the live runs. The verifier's check is a fresh request with no history: the claims, your prompt, the change, the facts, and the command output so far; it does not re-read the session. In the live runs above, a check of a turn's end took 2 to 18 s and 1 to 5 model calls on Haiku; on a reasoning model it takes longer. During the work the verifier runs at most 8 checks per prompt of yours; each check makes up to 6 model calls (12 if replies are unreadable and retried). Rechecks of open items run commands only.
 
-In a session you watch, nothing waits on the verifier. In a session nobody watches (`claude -p`), the turn's end waits for it.
+In a session you watch, nothing waits on the verifier. In a session nobody watches (`claude -p`), the turn's end waits for it: in the eval runs, a run with the plugin took 1.6 to 2.1 times as long as one without, the holds included.
 
 ## Known limits
 
 - **It only checks what the record or a command can show.** A model that did the wrong thing correctly, or misread what you wanted, leaves a record that holds. The verifier's review of the change catches some of that, and only where a command can show it.
-- **The rules read regexes, not meaning.** A project's own test runner under an unknown name does not count as a run (a command named for tests keeps "no run at all" quiet). An edit made through Bash (`sed -i`, a script) is not seen as an edit. Both make the rules miss rather than misfire.
+- **The rules read regexes, not meaning.** A project's own test runner under a name they do not know is no run. One whose name says test, check, lint, build, ci or verify (`./scripts/check-all`, `npm run verify`, `manage.py test`) keeps "no run at all" quiet; one that says none of these (`cargo nextest run`, `./go`) does not, so a pass claimed after it is held as unchecked, and the model can answer `[ysk#N refuted: …]`. An edit made through Bash (`sed -i`, a script) is not seen as an edit, which makes the rules miss rather than misfire.
 - **Without a sandbox the verifier mostly reads.** On Linux it cannot run the project's code; a defect it finds is a hypothesis the model's own run settles.
 - **A turn held at its end costs a step.** When the check is wrong, that step is wasted; the model can say so with `refuted`. Live runs found such misfires, and each became a test (below).
 - **The clone is not your machine.** A claim that depends on something outside the workspace can be judged false in the copy.
@@ -186,7 +195,7 @@ Claude Code writes type declarations into `.claude-plugin/types/` the first time
 | `hooks/prompt.ts` | The claim detector, the verifier's prompt and the parsing of its answers, what may run where, redaction, the note |
 | `hooks/band.tsx` | The band above the prompt |
 | `types/index.d.ts` | The item shape and the plugin's state contract |
-| `tests/*.test.ts` | 60 tests against Claude Code's plugin test kit; the cases marked `live:` are misfires live sessions produced |
+| `tests/*.test.ts` | 80 tests against Claude Code's plugin test kit; the cases marked `live:` are misfires live sessions produced |
 | `eval/` | The same tasks with the plugin and without, scored by code; see [eval/README.md](eval/README.md) |
 
 ## License

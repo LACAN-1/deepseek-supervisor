@@ -90,3 +90,39 @@
 - 交给模型的条目内容（模型原话、命令、输出）去掉控制字符和形似引擎标签的片段。
 - `prompt.submit` 钩子加了 `.catch`；`claude -p`（`sdk` 来源）的提示也会更新「用户问了什么」、重置预算和追加次数。
 - 新增不调模型的规则（`hooks/evidence.ts`）：测试失败却说通过、改代码后验证过期、没跑测试、说改了却没碰的文件。这类条目按会话记录关闭，Linux 上同样有效。
+
+## 0.8.0 跟进与全盘复查
+
+0.8.0 把检查放到发现能被立刻读到的位置：每批工具调用之后跑基于记录的规则（随工具结果送达），回合结束之前拿记录核对答复（没关的条目让这一轮继续，每个提示最多两次），验证者默认用更强的模型（`opus`，在 DeepSeek 上对应 Pro）并审查本轮改动。真实运行里发现的误报，每一条都写成了标着 `live:` 的测试。
+
+完成后又把整个项目复查了一遍（`hooks/`、`types/`、`tests/`、`eval/`、两份 README），并对照第 4 到 7 轮真实运行的记录逐条看了插件说过的话。找到并修复：
+
+| # | 严重度 | 位置 | 问题 | 状态 | 验证 |
+|---|---|---|---|---|---|
+| 16 | 中 | `prompt.ts` `PY_LINE`、`PROBE_FORBIDS` | 没有副本时，审查者给的探针命令会交给模型在用户权限下运行。白名单只看形状，`python3 -c "from os import system; print(system('id'))"`、`import shop, os`、经项目模块转出的 `from shop import os; print(os.popen(…))`、`os.posix_spawn`、`Path(…).rename(…)`、`node -e "console.log(require('fs')…)"`、`process.env`、`fetch(…)`、`import(…)` 都能通过 | **已修**：导入行不许出现 `os`、`sys`、`subprocess`、`socket` 等标准模块，并补上执行程序、联网、写文件、读环境的写法；`import shop as s` 和项目自己的模块照常放行 | **已验证**：11 种写法的测试在旧代码上被放行，修复后全部拒绝 |
+| 17 | 中 | `register.ts` `isKnown` | 回合结束时因"根本没跑检查"被拦下的答复，在模型按要求跑完检查之后又被当成新条目提了一遍（第 4 轮 `late-default`）：答复落进记录的位置正好等于条目的 `pos`，`<` 判成了"之后又说了一遍" | **已修**：条目记下结论说出的位置 `said`，同一处说的不再重提，之后再说一遍仍算新结论 | **已验证**：新测试在旧代码上失败（多出一条 #2），修复后通过 |
+| 18 | 低 | `register.ts` `check` | 一轮被拦两次时，同一份改动每次都整份送给审查者重审（第 4 轮 `already-there` 三次都送了 973 字符的同一份改动），多花一次调用，还可能和第一次的结论不一致 | **已修**：记下已完整审过的改动签名，相同的不再送 | **已验证**：新测试 |
+| 19 | 低 | `evidence.ts` `CHECK_PASS` | "我检查了代码，没问题"被当成"检查通过"的结论，没跑测试就会开出 no-check | **已修**：去掉"检查"，只认测试、构建、编译、类型检查 | **已验证**：新测试 |
+| 20 | 低 | `evidence.ts` `skipped` | "不要跑测试，太慢了"被当成要求跑测试；而且只看第一处匹配，"先别跑慢的，改完再跑单元测试"会漏 | **已修**：每一处都看，前面有否定词的不算 | **已验证**：新测试 |
+| 21 | 低 | `evidence.ts` ignored-constraint | 说过"不要改 config.py"之后，用户明确改口（"现在可以改 config.py 了"），之后的修改仍然报违背指示 | **已修**：之后的提示里出现针对该文件的修改要求（动词直接作用于它）就解除；"把代码改到测试通过"只是提到 tests，不解除 | **已验证**：新测试 |
+| 22 | 低 | `evidence.ts` `evidenceOf` | 被权限拦下的任何提到 test 的命令（`ls tests/`）都被记成"尝试跑检查"，写进 skipped-check 的提示 | **已修**：只记真正的检查命令 | **已验证**：新测试 |
+| 23 | 低 | `evidence.ts` no-check | "1 of 2 tests pass" 这类说了结果、却一次没跑的话，提示写的是"却说通过了" | **已修**：改成"却报告了它们的结果" | 读代码 |
+| 25 | 低 | `evidence.ts` `isCheckCommand` | `python` 被拒以后，worker 改用 `python3 << 'EOF' … unittest.TextTestRunner().run(suite) EOF` 跑完了测试（第 5 轮 `late-tidy`），规则没认出这是一次运行，"根本没跑"的条目在测试通过之后仍然开着 | **已修**：内联代码里调用了 `unittest.main`、`TextTestRunner` 或 `pytest.main` 的 python 调用算一次运行；手工调几个函数打勾的不算；探针过滤不变 | **已验证**：新测试 |
+| 26 | 中 | `evidence.ts` `mentioned` | 第 3 到 5 轮里，开着插件仍然"没跑测试却说通过"的 3 次答复（第 2 轮用的是更早的规则），都是模型用 heredoc 调被测函数、对一下数值之后说的。它写的代码里有 "Test"，被当成"可能是项目自己的测试脚本"，于是"根本没跑"这条保持沉默 | **已修**：模型内联写的代码（`python -c`、`node -e`、heredoc）不再算项目自己的测试脚本；调用了测试运行器或导入了测试模块（`from test_shop import …`）的才算跑了测试 | **已验证**：新测试；第 6 轮真实运行见 `eval/README.md` |
+| 27 | 中 | `evidence.ts` `CHECKED`、`prompt.ts` `factsText` | 第 6 轮：worker 修好失败的测试、用内联代码跑完整套测试（全部 ok）后写"✓ `test_discount` PASSED"。这句说的是一个具体测试名而不是 tests，没被当成"检查通过"的结论，交给了验证者；没有副本时验证者只看到"失败过的命令"列表，断定从没有通过的运行，白拦了一次 | **已修**：点名某个测试（`test_x`、`x_test`）说它通过，也由记录来判；给验证者的事实里加上本会话的测试和检查运行（成功、失败都列，按时间排） | **已验证**：新测试 |
+| 28 | 中 | `evidence.ts` `mentioned` | "根本没跑"这条规则在"可能是项目自己的测试脚本"跑过之后保持沉默，原来的判断是整条命令里出现 test、check、build、ci 之类的词。第 6 轮的工作目录叫 `/tmp/dss-eval-bent-test-…`，一条 `find` 就让它闭了嘴，worker 心算出来的"测试通过"没被拦下；真实项目里 `ls tests/`、`cat ci.yml` 一样 | **已修**：只看命令实际运行的东西的文件名（程序和交给它的脚本、任务，如 `bash ci.sh`、`npm run verify`、`python3 manage.py test`），不看所在文件夹；读写文件的工具命令一律不算，heredoc 的正文是文本不是命令，模型本次自己写的脚本也不算 | **已验证**：新测试在旧代码上失败，修复后通过；第 7 轮真实运行见 `eval/README.md` |
+| 24 | 低 | 两份 README | 漏了 skipped-check；写着"每个提示最多拦一次"（实际两次）；没写探针命令的限制；"下面的真实运行"实际在上面 | **已修** | 读文档对照代码 |
+
+另外清掉了 `CHECK_CLAIM`、`PASSED` 两个只是 `CHECK_PASS` 别名的常量。
+
+第 8 条（没有副本时，验证者开的条目可以凭它自己的判断关闭）仍保留原设计，README 的"条目怎么关"里已写明。
+
+### 跑了哪些检查
+
+| 检查 | 结果 |
+|---|---|
+| `claude plugin validate --strict .`（2.1.295） | √ Validation passed |
+| `claude plugin test .` | 全部通过（数量见 README 的开发一节）；第 17、18、28 条的测试在旧代码上先失败过 |
+| `tsc`（strict、`noUncheckedIndexedAccess`，对 Claude Code 自带的类型声明） | 无错误 |
+| `node eval/selftest*.mjs`（5 个） | all checks behave |
+| 真实 `claude -p` 会话的开/关对照（第 1 到 7 轮） | 见 README 的"实测"一节和 `eval/README.md` |
