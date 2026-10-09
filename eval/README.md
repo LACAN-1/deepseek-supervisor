@@ -144,15 +144,27 @@ Every run that failed with the plugin in rounds 4 and 5 was read: none failed be
 
 **Rounds 6 and 7** ran `weak` and `late` only, on the code with the fixes the round before had led to, and read every hold. Round 6 found two misfires, both fixed and tested since: a test named as passing ("✓ `test_discount` PASSED") went to the verifier, which, shown only the commands that failed, said no run had passed; and the `find` above. Round 7 found one: after a held turn the worker restated its answer with "To verify tests pass, run: …", and in another run "I cannot provide evidence that the official test command passes", and each was taken for a pass claim, holding the turn a second time. In rounds 6 and 7, every run that failed with the plugin was an `unreported` run whose test commands the harness refused, where the answer said so.
 
+### 0.8.0 on DeepSeek
+
+`deepseek-flash` through `api.deepseek.com` (confirmed in each run's debug log), Claude Code 2.1.295, plugin 0.8.0, 2026-10-09, 4 runs at a time, no stand-in prompt. The `weak` suite, 3 runs per task per arm; the `late` suite was stopped partway and is not counted.
+
+| task | with plugin | without | items raised | time per run, with / without | turns, with / without |
+|---|---|---|---|---|---|
+| `weak` (3 tasks) | 9/9 | 9/9 | 0 | 37 s / 21 s | 8.3 / 8.9 |
+
+Answers read by hand: two of them (`unreported` without, `bent-test` with), both naming the trap and the test run that shows it. The plugin's own token count reads 0 in every run; whether that means it called no model or that this harness does not see 0.8.0's calls was not checked.
+
 ### What this says
 
 On DeepSeek, with 0.4.0 on short tasks with one trap each, the model caught the traps by itself and the plugin added nothing measurable; the long and hard tasks did not change that. 0.8.0 is built for a different slip, a weaker model's: reporting checks it never ran, and leaving a failure unmentioned. Against a stand-in for such a model, in a harness that often kept it from running the tests its usual way, it cut the answers that say the tests pass with no run behind them from 28 in 129 to 7, and got the suite run three times as often. Pass rates did not move by more than chance, and runs took up to twice as long.
 
-So it makes a weak model's answers more honest about what was checked, at a cost in time; that it makes the work itself more often right is not shown. The stand-in is not DeepSeek, and these rounds are small. To see it on DeepSeek:
+So it makes a weak model's answers more honest about what was checked, at a cost in time; that it makes the work itself more often right is not shown. The stand-in is not DeepSeek, and these rounds are small. On DeepSeek, the one suite run to the end showed nothing for the plugin to catch (above). To run more of it there:
 
 ```bash
-DSS_CMD=claude DSS_ARGS="--model deepseek-v4-flash" node eval/run.mjs --suite weak --reps 3
-DSS_CMD=claude DSS_ARGS="--model deepseek-v4-flash" node eval/run.mjs --suite late --reps 3
+DSS_CMD=claude-deepseek node eval/run.mjs --suite weak --reps 3
+DSS_CMD=claude-deepseek node eval/run.mjs --suite late --reps 3
 ```
+
+`claude-deepseek` stands for whatever starts Claude Code on DeepSeek: plain `claude` reaches Anthropic unless `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic` and your DeepSeek key are set for it. Pick the model with `DSS_ARGS="--model deepseek-flash"` (or `deepseek-v4-flash`; both answered on 2026-10-09) if your setup does not map it already.
 
 The harness allows `python3` and not `python`, as in the rounds above; add `Bash(python:*)` to `TOOLS` in `run.mjs` for runs where the tests can always run.

@@ -100,16 +100,18 @@ The worker changed it to `return sum(prices) / len(prices) if prices else 0` and
 - **Pass rates: no difference that can be told from noise.** 114/129 with it, 102/129 without; but in the runs where the plugin said nothing to the model, which are runs without it drawn again, the gap to the off arm was about as large. The scorer reads the files and whether the answer gets the trap right, and a "tests pass" no run backs, if it happens to be true, still passes.
 - **It costs time:** in `claude -p`, where the verifier runs before the turn may end and a held turn goes on, a run took 1.5 to 2.1 times as long, with up to 2 more turns.
 
-So it makes a weak model's answers more honest about what was checked; that it makes the work itself more often right is not shown. The stand-in is not DeepSeek.
+So it makes a weak model's answers more honest about what was checked; that it makes the work itself more often right is not shown. The stand-in is not DeepSeek. On DeepSeek itself (`deepseek-flash` through `api.deepseek.com`, confirmed in the debug log; Claude Code 2.1.295, plugin 0.8.0, 2026-10-09), the `weak` suite, 3 runs per task per arm: **9/9 with the plugin, 9/9 without.** The plugin raised no item in any run, and a run took 37 s against 21 s on average. On these tasks DeepSeek did not make the slip the stand-in did, so there was nothing for the plugin to catch. The `late` suite was not run to the end.
 
 **What the live runs found wrong with the checks themselves**, each now a test marked `live:` in `tests/`: a runner with interpreter flags (`python3 -I -m unittest`) not taken for a run; a command the permissions refused, and a missing runner (`No module named pytest`), taken for failed runs; a model revising a test it had just written taken for bending one; "it passed before the edit" and "I claimed the tests pass without running them" taken for claims; a description of NOTES.md ("how to verify everything works") taken for a pass claim; a held turn whose last message lost the original answer; the verifier judging claims about the machine, and claims made before the code changed; a person's failing test replaced by the model's own, and tests asked for that never ran, not caught; an answer held for "no check ran" raised again once the run it asked for landed; the same change sent to the reviewer at every hold; tests run from a heredoc not taken for a run, and a check the model wrote inline taken for the project's own runner; a test named as passing ("✓ `test_discount` PASSED") handed to the verifier, which, shown only the commands that failed, said no run had passed; a `find` in a folder whose name held "test" taken for the project's own test runner, which kept "no check ran" quiet; a sentence telling the person how to check ("To verify tests pass, run …"), and one saying it could not be shown ("I cannot provide evidence that … passes"), taken for pass claims.
 
 To measure it on DeepSeek, from a clone (the `on` arm loads the plugin, the `off` arm does not):
 
 ```bash
-DSS_CMD=claude DSS_ARGS="--model deepseek-v4-flash" node eval/run.mjs --suite weak --reps 3
-DSS_CMD=claude DSS_ARGS="--model deepseek-v4-flash" node eval/run.mjs --suite late --reps 3
+DSS_CMD=claude-deepseek node eval/run.mjs --suite weak --reps 3
+DSS_CMD=claude-deepseek node eval/run.mjs --suite late --reps 3
 ```
+
+`claude-deepseek` stands for whatever starts Claude Code on DeepSeek: plain `claude` reaches Anthropic unless `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic` and your DeepSeek key are set for it. Pick the model with `DSS_ARGS="--model deepseek-flash"` (or `deepseek-v4-flash`; both answered on 2026-10-09) if your setup does not map it already.
 
 ## Example
 

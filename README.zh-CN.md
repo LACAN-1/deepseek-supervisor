@@ -100,16 +100,18 @@ Claude Code 自带一个旁路代理 "You should know"，看着 Claude 干活，
 - **通过率：看不出能和噪声区分开的差别。** 开插件 114/129，不开 102/129；但插件一句话都没对模型说的那些运行（等于不开插件又抽了一次），和关插件组的差距也差不多这么大。评分看的是留下的文件、以及答复有没有说对陷阱；一句没有运行支撑的"测试通过"，如果恰好是真的，也照样算通过。
 - **它花时间：** 在 `claude -p` 里，验证者在回合结束前就要跑，被拦下的回合还要继续干，单次运行耗时是不开插件的 1.5 到 2.1 倍，最多多 2 轮。
 
-所以，它让能力一般的模型在"查过什么"这件事上说实话；至于活本身做对的次数是否因此变多，这些数据还说明不了。替身也不是 DeepSeek。
+所以，它让能力一般的模型在"查过什么"这件事上说实话；至于活本身做对的次数是否因此变多，这些数据还说明不了。替身也不是 DeepSeek。在 DeepSeek 本身上（`deepseek-flash`，经 `api.deepseek.com`，调试日志里确认过；Claude Code 2.1.295，插件 0.8.0，2026-10-09），跑 `weak` 组，每个任务每组 3 次：**开插件 9/9，不开 9/9。** 插件在所有运行里都没有开出条目，单次运行平均 37 秒，不开插件 21 秒。在这几个任务上 DeepSeek 没有犯替身犯的那种错，插件也就没东西可抓。`late` 组没有跑完。
 
 **真实运行暴露出的检查本身的问题**，每一条都已写成 `tests/` 里标着 `live:` 的测试：带解释器参数的运行器（`python3 -I -m unittest`）没被认成跑测试；被权限拦下的命令、没装的运行器（`No module named pytest`）被当成失败的运行；模型修改自己刚写的测试被当成削弱测试；"改动前测试是通过的""我之前没跑就说通过了"被当成结论；对 NOTES.md 的描述（"怎么验证一切正常"）被当成"测试通过"的声明；被拦下后最后一条消息丢了原本的答复；验证者去核对关于机器环境的说法、以及代码改动之前说的话；用户那条失败的测试被模型换成了自己的测试、被要求跑测试却一次没跑成，都没被抓到；因为"根本没跑"被拦下的答复，在它要的那次运行完成后又被提了一遍；每次拦下都把同一份改动再送去审一遍；用 heredoc 跑的测试没被认成跑过测试，模型自己临时写的核对代码反倒被当成了项目自己的测试脚本；点名某个测试说它通过（"✓ `test_discount` PASSED"）被交给了验证者，而验证者只看到失败过的命令，断定从没有通过的运行；在名字里带 test 的文件夹里执行一条 `find`，就被当成了项目自己的测试脚本，"根本没跑"这条因此不再出声；告诉用户怎么核对的话（"To verify tests pass, run …"），和承认没法证明的话（"I cannot provide evidence that … passes"），被当成了"测试通过"的结论。
 
 在 DeepSeek 上实测（从克隆的目录里运行；`on` 一组加载插件，`off` 一组不加载）：
 
 ```bash
-DSS_CMD=claude DSS_ARGS="--model deepseek-v4-flash" node eval/run.mjs --suite weak --reps 3
-DSS_CMD=claude DSS_ARGS="--model deepseek-v4-flash" node eval/run.mjs --suite late --reps 3
+DSS_CMD=claude-deepseek node eval/run.mjs --suite weak --reps 3
+DSS_CMD=claude-deepseek node eval/run.mjs --suite late --reps 3
 ```
+
+`claude-deepseek` 指任何能让 Claude Code 连到 DeepSeek 的启动命令：直接用 `claude` 会连到 Anthropic，除非给它设了 `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic` 和你的 DeepSeek key。你的配置没有映射模型时，用 `DSS_ARGS="--model deepseek-flash"` 指定（`deepseek-v4-flash` 也行，2026-10-09 两个都实测能用）。
 
 ## 例子
 
