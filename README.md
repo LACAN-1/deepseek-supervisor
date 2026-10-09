@@ -152,6 +152,7 @@ Or, for one session, from a clone: `claude --plugin-dir /path/to/deepseek-superv
 | | |
 |---|---|
 | Status line | `deepseek-supervisor checking · N noted (M open) · last: …`, or why it is idle |
+| Above the prompt | `☀ Clear  12% of context  120k / 1M  last turns ▁▂▃` : how full the context window is, its last 12 turns, and the last turn's growth (Anthropic's example mod Token Weather, bundled; a third-party endpoint shows no usage of its own). Shown on any endpoint |
 | `/deepseek-supervisor on` / `off` | Force it on or off, whatever the endpoint. Off also clears the band. |
 | `/deepseek-supervisor auto` | Back to the default: on only away from Anthropic's endpoint. |
 | `/deepseek-supervisor issues` | This session's items: where each stands, the command and what it printed, and what settled it. |

@@ -89,8 +89,15 @@ export type Cards = {
   items: Finding[]
 }
 
+/** One look at the context window, taken when a main-loop turn ends (hooks/weather.tsx). */
+export type Reading = {
+  tokens: number
+  window: number
+  percent: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'deepseek-supervisor': { cards: Cards | null; isHidden: boolean; track: Track }
+    'deepseek-supervisor': { cards: Cards | null; isHidden: boolean; track: Track; readings: Reading[] }
   }
 }

@@ -152,6 +152,7 @@ claude plugin install deepseek-supervisor@deepseek-supervisor
 | | |
 |---|---|
 | 状态栏 | `deepseek-supervisor checking · N noted (M open) · last: …`，待机时显示原因 |
+| 提示框上方 | `☀ Clear  12% of context  120k / 1M  last turns ▁▂▃`：上下文用了多少、最近 12 轮的走势、上一轮涨了多少（Anthropic 的示例插件 Token Weather，一并带上；第三方接口自己不显示用量）。任何接口上都显示 |
 | `/deepseek-supervisor on` / `off` | 不管接的是哪个接口，强制打开或关闭。关闭时也会清掉提示框上方那一栏 |
 | `/deepseek-supervisor auto` | 恢复默认：只在非 Anthropic 接口上工作 |
 | `/deepseek-supervisor issues` | 本次会话的条目：各自的状态、跑的命令和输出、是什么关掉了它 |

@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 
-import type { Issue, Track } from '../types'
+import type { Issue, Reading, Track } from '../types'
 import { registerBand } from './band'
+import { HISTORY as READINGS_KEPT, readingOf } from './weather'
 import type { Finding, Kind } from './evidence'
 import { changesOf, contradictions, evidenceOf, isCheckClaim, isCheckCommand, isCheckKind, isClaim, keyOf, recordFindings, settledBy, skipped, supports, unreported } from './evidence'
 import type { Facts, Mode, VerifyInput, VerifyResult } from './prompt'
@@ -127,6 +128,15 @@ const show = async ($: EngineInterface) => {
     )
   const open = (await read($, track)).issues.filter(i => i.status === 'open').length
   $.ui.status(`deepseek-supervisor checking · ${told} noted` + (open === 0 ? '' : ` (${open} open)`) + (last === '' ? '' : ` · last: ${last}`))
+}
+
+// The context window's fill, for the line above the prompt (weather.tsx, drawn in
+// band.tsx). Taken when a session starts and when a main-loop turn ends; a host
+// that reports no usage leaves the line out and never breaks the check.
+const readings = atom({ plugin: 'deepseek-supervisor', key: 'readings' } as const, [] as Reading[])
+const takeReading = async ($: EngineInterface) => {
+  const reading = readingOf((await $.session.usage().catch(() => undefined))?.context)
+  if (reading !== undefined) await update($, readings, h => [...(h ?? []), reading].slice(-READINGS_KEPT)).catch(() => undefined)
 }
 
 const remember = async ($: EngineInterface, entry: Record<string, unknown>) => {
@@ -626,6 +636,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    await takeReading($)
     isInteractive = e.isInteractive !== false
     // A reload starts here too: what was raised before it does not hold a turn after it.
     turnFrom = await $.clock.now()
@@ -716,6 +727,7 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    if (e.agentId === undefined) await takeReading($) // main-loop turns only
     // Only a turn the model finished on its own: one the person interrupted says nothing.
     // Where nobody watches, the verifier already ran before the turn could end.
     if (e.agentId !== undefined || e.reason !== 'answer' || !isInteractive || !(await isOn($))) return result
