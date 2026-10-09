@@ -141,9 +141,25 @@ export const refusal = (command: string, mode: Mode, real: string): string | und
   if (real.length > 1 && command.includes(real)) return `names the real workspace (${real}); use paths relative to the copy`
   if (mode === 'copy') return undefined
   if (/>|\b(?:sed|perl)\s+-i|-delete\b|-exec\b|\brm\b|\bmv\b|\bcp\b|\btee\b/.test(command)) return 'read-only mode: no copy of the workspace could be made, so nothing that writes may run'
-  const words = command.split(/\||&&|\|\||;/).map(p => p.trim().split(/\s+/)[0] ?? '')
-  const other = words.find(w => w !== '' && !READERS.has(w))
-  return other === undefined ? undefined : `read-only mode: only ${[...READERS].join(', ')} may run, not ${other}`
+  // Only the first word of each piece is checked below, so anything that starts a
+  // command elsewhere (a new line, `&`, `$(…)`, backticks, `<(…)`) would run unchecked.
+  if (/[\n\r`]|\$\(|<\(|(?<!&)&(?!&)/.test(command)) return 'read-only mode: one plain command or a pipe of them, no new lines, `&`, or command substitution'
+  const pieces = command.split(/\||&&|\|\||;/).map(p => p.trim().split(/\s+/))
+  const other = pieces.map(p => p[0] ?? '').find(w => w !== '' && !READERS.has(w))
+  if (other !== undefined) return `read-only mode: only ${[...READERS].join(', ')} may run, not ${other}`
+  // Readers that write or run something given the right flag.
+  const writes = pieces.some(([w, ...args]) =>
+    w === 'find'
+      ? args.some(a => /^-(?:execdir|ok|okdir|fprint0?|fprintf|fls)$/.test(a))
+      : w === 'rg'
+        ? args.some(a => /^--pre(?:=|$)/.test(a))
+        : w === 'sort'
+          ? args.some(a => /^-[a-zA-Z]*o|^--output/.test(a))
+          : w === 'uniq'
+            ? args.filter(a => !a.startsWith('-')).length > 1
+            : w === 'file' && args.some(a => /^-[a-zA-Z]*C|^--compile/.test(a)),
+  )
+  return writes ? 'read-only mode: no copy of the workspace could be made, so nothing that writes may run' : undefined
 }
 
 export const shown = (out: string) => (out.length > OUTPUT_CHARS ? `${out.slice(0, OUTPUT_CHARS / 2)}\n…[${out.length - OUTPUT_CHARS} chars cut]…\n${out.slice(-OUTPUT_CHARS / 2)}` : out)
