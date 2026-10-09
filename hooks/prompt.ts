@@ -137,13 +137,30 @@ export type VerifyInput = {
 // Kept to the copy: a command naming the real workspace would reach past it.
 // Read-only mode, when no copy could be made, runs only what cannot write.
 const READERS = new Set(['cat', 'head', 'tail', 'grep', 'rg', 'ls', 'wc', 'file', 'stat', 'find', 'diff', 'cmp', 'shasum', 'md5', 'sort', 'uniq', 'cut', 'tr', 'jq', 'echo', 'test', '['])
+// Only the first word of each piece is checked, so a second command on a new line
+// or after `&`, or one run inside another ($(…), `…`, <(…)), would get past it.
+const NESTED = /[\n\r`]|\$\(|<\(|(?<!&)&(?!&)/
+// The readers' own flags that write a file or run another program.
+const WRITING_FLAGS: Record<string, RegExp> = {
+  find: /^-(?:exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
+  sort: /^(?:-[^-]*o|--output|--compress-program)/,
+  rg: /^--pre(?:=|$)/,
+  file: /^(?:-[^-]*C|--compile)/,
+}
 export const refusal = (command: string, mode: Mode, real: string): string | undefined => {
   if (real.length > 1 && command.includes(real)) return `names the real workspace (${real}); use paths relative to the copy`
   if (mode === 'copy') return undefined
+  if (NESTED.test(command)) return 'read-only mode: one command line only, with no command inside another (newline, &, $(…), `…`, <(…))'
   if (/>|\b(?:sed|perl)\s+-i|-delete\b|-exec\b|\brm\b|\bmv\b|\bcp\b|\btee\b/.test(command)) return 'read-only mode: no copy of the workspace could be made, so nothing that writes may run'
-  const words = command.split(/\||&&|\|\||;/).map(p => p.trim().split(/\s+/)[0] ?? '')
-  const other = words.find(w => w !== '' && !READERS.has(w))
-  return other === undefined ? undefined : `read-only mode: only ${[...READERS].join(', ')} may run, not ${other}`
+  for (const [word = '', ...args] of command.split(/\||&&|\|\||;/).map(p => p.trim().split(/\s+/))) {
+    if (word === '') continue
+    if (!READERS.has(word)) return `read-only mode: only ${[...READERS].join(', ')} may run, not ${word}`
+    const flag = args.find(a => WRITING_FLAGS[word]?.test(a) === true)
+    // `uniq in out` writes out.
+    const uniqOut = word === 'uniq' && args.filter(a => !a.startsWith('-') && !/^\d+$/.test(a)).length > 1
+    if (flag !== undefined || uniqOut) return `read-only mode: \`${word} ${flag ?? '<in> <out>'}\` writes a file or runs a program`
+  }
+  return undefined
 }
 
 export const shown = (out: string) => (out.length > OUTPUT_CHARS ? `${out.slice(0, OUTPUT_CHARS / 2)}\n…[${out.length - OUTPUT_CHARS} chars cut]…\n${out.slice(-OUTPUT_CHARS / 2)}` : out)

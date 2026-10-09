@@ -116,6 +116,14 @@ test('commands stay in the copy; with no copy, only what cannot write runs', asy
   expect(refusal('grep -c total a.py | wc -l', 'read-only', '/p')).toBeUndefined()
   expect(refusal('python3 a.py', 'read-only', '/p')).toContain('not python3')
   expect(refusal('cat a > b', 'read-only', '/p')).toContain('read-only')
+  // A second command, or one run inside a reader, is not a reader.
+  for (const c of ['cat a\npython3 x.py', 'cat a & python3 x.py', 'echo $(python3 x.py)', 'echo `touch x`', 'cat <(python3 x.py)'])
+    expect(refusal(c, 'read-only', '/p')).toContain('read-only')
+  // Nor is a reader's flag that writes or runs something.
+  for (const c of ['find . -execdir touch {} ;', 'find . -fprint out', 'sort -o out a', 'sort -uo out a', 'sort --compress-program=python3 a', 'rg --pre ./x.sh y', 'uniq a out', 'file -C -m a'])
+    expect(refusal(c, 'read-only', '/p')).toContain('read-only')
+  for (const c of ['sort a | uniq -c', 'uniq -f 2 a', 'find . -name "*.py" | wc -l', 'rg --pre-glob "*.gz" x', 'grep -c x a && echo ok'])
+    expect(refusal(c, 'read-only', '/p')).toBeUndefined()
 })
 
 test('a false verdict needs the command and the output behind it', async () => {
