@@ -1,57 +1,79 @@
-# deepseek-supervisor 云端审查（cloud-review 分支）
+# deepseek-supervisor 云端审查报告（cloud-review 分支）
 
-审查范围：`hooks/`、`types/`、`tests/`、`eval/`、两份 README，包括作者未完成的 WIP 提交 `dc8aec1`。
-环境：Linux 云容器，Node 22.22，Claude Code 2.1.295（有 `claude` CLI），**没有 macOS `sandbox-exec`**。
+审查范围：`cloud-review` 分支 dc8aec1（含作者未完成的 WIP）上的全部代码：`hooks/`、`types/`、`tests/`、`eval/`、两份 README。审查环境为 Linux 云容器（没有 macOS `sandbox-exec`），所以「副本里执行」这条路径只能读代码判断。
 
 ## 总体评价
 
-代码整体干净，状态模型清楚（条目编号放在 `$.state`、`isSameItem` 去重、`race.test.ts` 覆盖并发），测试比较扎实。
-真正的问题集中在**命令执行的安全边界**：
+代码短，结构清楚，测试也按行为写。纯文本处理的部分（`prompt.ts` 的声明抽取、解析、去重）没有发现正确性问题，测试全部通过（审查前 16 个，修复后 17 个）。
 
-- **只读模式的过滤器可以被绕过，绕过后能执行任意命令**（最严重，已修）。在 Linux 上验证者的命令永远走只读模式，而且直接跑在**真实工作区、没有任何沙箱**，所以这个过滤器就是唯一的防线。验证者模型读到的是项目里的命令输出，项目内容里的提示注入可以借此在用户机器上执行命令。
-- macOS 沙箱的禁写路径没有做 realpath（已修，未在 macOS 上验证）。
-- 复查命令（recheck）没有过 `refusal()`（已修）。
+> 说明：这次审查由同一个定时任务的两个会话并行完成，两边独立发现了第 1、2 条并各自修复，之后用一次普通的 merge 提交合并（没有 force push）。合并时保留了覆盖面更大的实现：第 1 条额外拦住 `sort --compress-program`（会执行任意程序），第 2 条把家目录也加了 realpath；另外补上第 14 条（复查命令绕过 `refusal()`）。主要问题在**安全边界**上：
 
-除此之外没发现正确性 bug。不为凑数列风格问题。
+- 在 Linux（以及任何没有沙箱的机器）上，插件一直处在「只读模式」：命令不进沙箱，直接在**真实工作区**里用 `bash -c` 执行。这时唯一的防线是 `refusal()` 这个过滤器，但它只检查按 `| && || ;` 切开后每一段的第一个词，用换行、`&`、`$(…)`、反引号都能绕过去，验证者因此可以在真实工作区里跑任意命令。验证者是第三方模型，它会读到项目文件的内容，项目文件里的文字可以引导它（提示注入）。**这一条已修。**
+- macOS 沙箱只禁写工作区「传入的路径」，没有禁写它解析后的真实路径。**已修**（只加了禁写规则，没有放宽任何东西）。
+- 有几处 README 说的和代码实际做的不一致（模型调用预算、沙箱能限制什么）。**已修。**
+- eval 统计插件活动用的日志格式只有 0.4.0 才写，换成 0.6.0 跑会把插件活动统计成 0。**已修。**
 
-## 发现（按严重度）
+## 发现（按严重度排）
 
-| # | 严重度 | 位置 | 问题 | 失败场景 | 状态 | 验证 |
+「已验证」表示我做过一次能推翻该结论的观察，具体做法写在「验证」列。
+
+| # | 严重度 | 位置 | 问题 | 具体失败场景 | 状态 | 验证 |
 |---|---|---|---|---|---|---|
-| 1 | **高** | `hooks/prompt.ts:140-147`（修前） | 只读模式的 `refusal()` 只检查按 `\| && \|\| ;` 切开后每段的第一个词。换行、单个 `&`、`$(…)`、反引号、`<(…)` 都能夹带第二条命令；白名单里的工具本身也有写文件/执行程序的参数：`find -execdir/-ok/-fprint/-fls`、`sort -o`/`--compress-program`、`rg --pre`、`file -C`、`uniq in out`。 | Linux 上（或 macOS 克隆失败时），验证者回 `{"run": ["cat a\npython3 -c '…'"]}`，在**真实工作区、无沙箱**下跑了 python。12 种绕过修前全部返回 `undefined`（放行）。 | 已修 `7f97346`、`74c928e` | **已验证**。反证：「如果这些命令被拒，这条就是假的」。修前用 `node --experimental-strip-types` 直接调 `refusal()` 跑 12 个用例，全部 ALLOWED；`bash -c $'cat /dev/null\ntouch pwned'` 确实建出了 `pwned`。修后同一脚本 12/12 被拒。新增的断言在旧 `prompt.ts` 上失败（`git checkout HEAD -- hooks/prompt.ts` 后 `claude plugin test .`：15 pass 1 fail），修后通过。 |
-| 2 | 中 | `hooks/register.ts:118-123, 164-165`（修前） | 沙箱配置里克隆路径同时给了原路径和 `realpath`（作者显然知道 sandbox 按解析后的路径匹配），但**禁写的家目录和真实工作区只给了原路径**。 | macOS 上工作区是 `/tmp/proj`（实为 `/private/tmp/proj`）或通过家目录外的符号链接进入：`(deny file-write* (subpath "/tmp/proj"))` 匹配不到 `/private/tmp/proj`，项目脚本写绝对路径就能写进真实工作区。 | 已修 `2823592`（禁写路径也同时放原路径和 realpath） | **未验证**（云端没有 `sandbox-exec`，无法实测 SBPL 的匹配行为；依据是作者对克隆路径已经这么做了，以及 macOS 上 `/tmp → /private/tmp` 的已知行为）。生成的配置字符串由已有测试断言。 |
-| 3 | 中低 | `hooks/register.ts:170-174`（修前） | 复查命令是验证者模型给的，但没经过 `refusal()`。README 说「命令里写了你真实工作区路径的，一律拒跑」。 | 复查命令写成 `cd /p && python3 -m unittest`：它在真实工作区里跑，条目按真实文件的状态关闭，写操作只靠 macOS 沙箱挡。 | 已修 `b6d61e7`（被拒的复查记进 `ran`，条目保持 open） | **已验证**。新测试在旧 `register.ts` 上失败（`git stash -- hooks/register.ts` 后：16 pass 1 fail），修后通过。 |
-| 4 | 中 | `hooks/prompt.ts` `READERS` + 只读模式 | 只读模式（Linux 上一直是它）对**读**没有任何限制：`cat ~/.ssh/id_rsa`、`cat .env` 都放行，输出原样进下一轮提示，发给第三方端点（DeepSeek）。提示词里「不要把密钥抄进字段」挡不住它进 transcript。 | 项目里的提示注入让验证者去读 `~/.aws/credentials`，内容随下一轮请求发到第三方端点。 | **未修**：README 写了「读取不受限制」，是作者的取舍；要改得设计（例如只读模式只允许工作区内的相对路径）。 | 已验证（读代码：`refusal()` 只看写/执行；`register.ts:209` 把输出拼进 transcript）。 |
-| 5 | 低 | `eval/run.mjs:88-99`、`eval/pressure.mjs:208` | 评测脚本按旧版（0.4.0）的日志格式统计插件活动：`$.model.fork (deepseek-supervisor)`、`WATCH {…}.fresh`、`[plugin_model_fork] finished`。现在的代码调 `$.model.complete`，日志行是 `CHECK {…found…}`。 | 用当前版本跑 `node eval/run.mjs`，`passes`/`items`/token 全是 0，「plugin got a look in」列永远 0/N。 | **未修**：`model.complete` 在 debug 日志里的格式我不知道，只能修一半；而且不确定作者是否打算沿用这些指标。 | 已验证：`grep -rn "WATCH\|model.fork" hooks/` 无结果，`register.ts:301` 只写 `CHECK`。 |
-| 6 | 低 | `eval/README.md:20,44`、`eval/tasks.mjs:7` | 写的是「reviewer 每 6 步看一次」，现在代码是每 3 步（`MIN_GAP = 3`）。结果表应该是旧版插件跑出来的，但 README 没标版本。 | 读者会以为表里的数据对应 0.6.0。 | **未修**：不确定那些结果用的是哪个版本，建议作者标注。 | 已验证（`grep -n "every 6" eval/`；`register.ts:19`）。 |
-| 7 | 低 | `hooks/prompt.ts` `refusal()` 的 `>` 规则 | 只读模式拒绝一切含 `>` 的命令，包括 `2>&1`、`2>/dev/null`，以及 `grep '->'` 这类参数。 | 验证者常用的写法被拒，只读模式能查的东西更少。只是可用性问题，不影响安全。 | 未修（放宽要仔细设计，不是小改动） | 已验证：`refusal('grep x a 2>/dev/null','read-only','/p')` 返回拒绝。 |
-| 8 | 低 | `README.md:114`、`README.zh-CN.md:114` | 写的「15 个测试」，WIP 提交时实际已经 16 个。 | — | 已修 `b804d25`（改成 17，含本分支新增的 1 个） | 已验证：`claude plugin test .` → `Ran 17 tests`。 |
+| 1 | 高 | `hooks/prompt.ts:140-147`（修复前） | 只读模式的命令过滤器能绕过，导致命令注入 | Linux 上验证者回复 `{"run":["cat a.py\npython3 evil.py"]}`，第二行会在真实工作区里不受限地执行。`cat a & python3 x`、`cat $(python3 x)`、`` cat `python3 x` ``、`cat <(python3 x)` 同样能执行；`find -execdir/-ok/-fprint/-fls`、`rg --pre`、`sort -o`、`sort --compress-program=PROG`、`uniq IN OUT`、`file -C` 都能写文件或执行程序，但第一个词都在白名单里 | **已修** edaaf75 / 7f97346 / 74c928e（合并后采用 7f97346 的实现） | **已验证**：先用 `node --experimental-strip-types` 直接调用 `refusal()`，修复前 9 种写法都返回 ALLOWED；新加的测试在旧代码上失败（15 pass / 1 fail），修复后通过；另一会话独立复现：12 种写法修复前全部 ALLOWED，`bash -c $'cat /dev/null\ntouch pwned'` 真的建出了 `pwned`；`sort \| uniq -c; echo "exit=$?"`、`test -f x && echo`、`uniq -f 2 a`、`rg --pre-glob` 仍然放行 |
+| 2 | 中 | `hooks/register.ts:118-123, 165`（修复前） | 沙箱只对 `input.cwd` 原样禁写，没有禁写它解析后的真实路径 | 工作区在 `/tmp/proj`（macOS 上实际是 `/private/tmp/proj`），或者工作区本身经过符号链接进入：sandbox-exec 按解析后的路径匹配，deny 规则匹配不上，项目脚本写绝对路径就能改到真实文件 | **已修** 55405cc / 2823592：cwd 和家目录都同时按原路径和 `realpath` 禁写（家目录本身是符号链接的情况较少，但修法相同） | **未验证**：Linux 上没有 sandbox-exec，无法实测。依据是作者已经因为同样的原因把克隆的 `realpath` 加进了 allow 规则（`register.ts:164`），能推翻这个判断的观察是「sandbox-exec 按未解析的路径匹配」，这个观察在这里做不了。这个修复只增加 deny 规则，不会放宽任何权限 |
+| 3 | 中 | `hooks/register.ts:22, 277, 297-300` | `seen` 只保留最近 200 条，而 `newClaims` 每次都扫描全部 assistant 消息。被挤出 `seen` 的旧声明会重新算作「新声明」 | 长会话里出现超过 200 条匹配声明的句子以后（`CLAIM` 正则很宽，"done""完成"都算），之后每次 tick 都会把 12 条旧声明重新交给验证者：8 次预算花在已经查过的旧话上，可能对早已过时的「All tests pass」开出新条目 | **未修**（修法要改「哪些消息已经扫过」的记录方式，会动 Track 结构，需要作者决定） | **已验证**：把 `newClaims` 和 seen 的更新逻辑原样复制出来，模拟 250 条消息、40 次 tick。第 30 次以后每次 tick 都交出 12 条，内容是 "Step 82 done." 这类旧声明 |
+| 4 | 中 | README.md:87、README.zh-CN.md:87、`register.ts:15-18`、`types/index.d.ts` Track.runs | 文档说「每次提示最多调用 8 次模型」，代码实际是每次提示最多 8 次**检查**，每次检查最多 6 次调用，加上重试最多 12 次 | 用户按 8 次调用估算成本，实际最坏是 96 次。现有测试的 mock 每次检查只调用一次模型，所以测试测不出这个差别 | **已修**（改的是文档，不是代码）8c661a3 | **已验证**：读 `register.ts:180-191`（每轮 1 次调用，加 1 次重试）和 `:276-277`（`runs` 每次检查只加 1） |
+| 5 | 中 | `eval/run.mjs` pluginStats | 只匹配 0.4.0 的日志格式（`$.model.fork`、`WATCH {fresh}`）；0.6.0 写的是 `CHECK {claims, found}` | 用当前版本跑 eval，"plugin got a look in" 一列和 passes/items 永远是 0，看起来像插件什么都没做 | **已修** 116510b（同时识别 CHECK 行；0.6.0 的 token 用量没写进 debug 日志，所以 token 一列仍然是 0，注释里已写明） | **已验证**：用构造的日志测试，0.6.0 的日志旧代码统计出 {0,0}，新代码统计出 {passes:2, items:3}；0.4.0 的日志新旧代码结果相同 |
+| 6 | 中 | README.md:21, 89；README.zh-CN.md:21, 89 | README 说「只能写克隆」，实际沙箱配置是 `(allow default)` 加禁写家目录和工作区 | `/tmp`、`/usr/local`、外接卷等都能写，README 说的范围比实际窄 | **已修** 8c661a3 | **已验证**：读 `boxOf` 生成的配置，和测试里断言的字符串一致 |
+| 7 | 中（设计问题） | `boxOf` / README「读取不受限」 | 读取完全不受限，命令输出又会发给第三方模型接口 | 验证者被项目文件里的文字引导，跑了 `cat ~/.ssh/id_rsa` 或 `env`，输出就进了发往 DeepSeek 的请求。提示词里只写了「不要抄进字段」，但发出去的 transcript 里本身就带着完整输出 | 未修（README 已经说明读取不受限，是否收紧由作者决定） | 未验证（要有真实模型才能复现，这是按代码路径推出来的：`register.ts:211` 把输出拼进 transcript，`:182` 把 transcript 发出去） |
+| 8 | 低 | README「How an item closes / fixed」 vs `register.ts:176, 195` | README 说「只有 recheck 退出 0 才算 fixed，模型说了不算」。但在只读模式下（所有 Linux 机器都是），带 recheck 的条目也会交给验证者模型，凭它回复 `items[].status: fixed` 就能关闭 | Linux 用户看到的 fixed，其实是第二个模型的判断，不是命令的退出码 | 未修（代码显然是有意这么写的，`mode !== 'copy' \|\| …`；建议在 README 里说明这一点） | **已验证**：读 `register.ts:176` 的 toRecheck 条件，以及 `:195` 只要 id 在 toRecheck 里就接受 |
+| 9 | 低 | `prompt.ts:141` | 复制模式下用 `command.includes(real)` 判断命令有没有指向真实工作区：只按前缀匹配，有误伤，也很容易绕过 | `cat /Users/me/proj2/x` 在 real=`/Users/me/proj` 时会被拒（误伤）；`$OLDPWD`、`$HOME/proj`、`/Users/me/./proj` 都不会被拒。真正的保护靠沙箱，这一条只能起提示作用 | 未修 | **已验证**：直接调用 `refusal()`，`/Users/me/proj2/x` 被拒，`echo hi > "$OLDPWD/x"` 放行 |
+| 10 | 低 | `register.ts:103` vs `:117` | 判断有没有沙箱时检查的是 `/usr/bin/sandbox-exec`，真正执行时却按 PATH 去找 `sandbox-exec` | PATH 里有一个同名程序抢在前面时，执行的就不是系统沙箱 | 未修（改起来要同时改测试 mock 里的 `cmd === 'sandbox-exec'`，收益小） | 已验证（读代码） |
+| 11 | 低 | `copyOf`：`cp -R` | BSD `cp -R` 把符号链接原样复制成符号链接；克隆里如果有指向工作区外、家目录外的链接，往里写就会写到真实目标 | 项目里有 `data -> /Volumes/shared/data` 这样的链接，测试往 `data/` 写文件，会写到共享卷上 | 未修 | 未验证（macOS 上的行为，这里无法实测） |
+| 12 | 低 | `eval/README.md` | 描述的是 0.4.0 的行为（"the reviewer looks every 6 steps"），结果日期 2026-10-08，和 0.4.0 提交是同一天；0.6.0 的 `MIN_GAP` 是 3 | 读者会以为这些结果是 0.6.0 跑出来的 | 未修（结果怎么表述该由作者定） | 已验证：`git log` 的日期，以及 `register.ts:19` |
+| 14 | 中低 | `hooks/register.ts:170-174`（修复前） | 复查命令（recheck）也是验证者模型给的，但没经过 `refusal()`；README 说「命令里写了你真实工作区路径的，一律拒跑」 | recheck 写成 `cd /p && python3 -m unittest`，会在真实工作区里跑，条目按真实文件的状态关闭，写操作只靠 macOS 沙箱挡 | **已修** b6d61e7：先过 `refusal()`，被拒的记进 `ran`，条目保持 open | **已验证**：新测试在旧 `register.ts` 上失败（16 pass / 1 fail），修复后通过 |
+| 15 | 低 | `prompt.ts` 的 `>` 规则 | 只读模式拒绝所有含 `>` 的命令，包括 `2>&1`、`2>/dev/null` | 验证者常用的写法被拒，只读模式下能查的东西更少。只影响可用性，不影响安全 | 未修（放宽需要仔细设计） | **已验证**：`refusal('grep x a 2>/dev/null','read-only','/p')` 返回拒绝 |
+| 13 | 低 | README「It picks at most 3 claims」 | 这只是提示词里的要求，`parseTurn` 并不限制 `checked` 的条数 | 模型返回 10 条 false，就会一次开出 10 个条目 | 未修 | 已验证（读 `prompt.ts` parseTurn） |
 
-看过、没发现问题的：`isAnthropic` 的 host 解析（`api.anthropic.com.evil.com` 不会被当成 Anthropic），`drop()` 只删 `dss-verify.*`，克隆失败会回退到只读并删掉半成品，`parseTurn` 处理非法 claim 序号，`atAnswer` 和 `tick` 并发（有 `race.test.ts` 覆盖），每次提示最多一次追加提示。
+没有发现值得报告的风格问题，所以没有报。
 
-## 跑过的检查
+## 跑了哪些检查
 
 | 检查 | 结果 |
 |---|---|
-| `claude plugin validate .` | `√ Validation passed`（修前修后都是）。有一条提示 `gating hook without .catch: prompt.submit`，是校验器的信息行，不是失败。 |
-| `claude plugin test .` | 修前 16 pass / 0 fail；修后 **17 pass / 0 fail**（新增 1 个测试，并在已有测试里加了断言）。 |
-| `node eval/selftest.mjs` / `selftest-long.mjs` / `selftest-hard.mjs` | 三个都输出 `all checks behave`，没有 FAIL 行（修复之前跑的；修复没碰 eval/）。 |
-| 反证脚本（`refusal()` 的 12 个绕过用例，`node --experimental-strip-types`） | 修前 12/12 放行，修后 12/12 拒绝。 |
-| 新断言在旧代码上的表现 | 修复 1、3 的测试都在旧代码上失败过，确认测试真能抓住问题。 |
+| `claude plugin validate .`（Claude Code 2.1.295） | √ Validation passed（修复前后都是） |
+| `claude plugin test .` | 修复前 16 pass / 0 fail；把新测试放到旧 `prompt.ts` 上跑是 15 pass / 1 fail（复现了问题 1）；全部修复并合并后 **17 pass / 0 fail**（第 14 条的测试在旧代码上同样先失败过） |
+| `node eval/selftest.mjs` | all checks behave |
+| `node eval/selftest-long.mjs` | all checks behave |
+| `node eval/selftest-hard.mjs` | all checks behave |
+| `node --check eval/run.mjs` | 语法正确 |
+| 用 node 直接调用 `refusal()` 和模拟 seen 淘汰的临时脚本 | 输出见上表第 1、3、9 条 |
 
 ## 没跑的及原因
 
-- **`npx tsc --noEmit`：未运行成功。** `tsconfig.json` 继承 `.claude-plugin/types/tsconfig.json`，这个文件要 Claude Code 第一次加载插件时才生成，云端没有，所以 tsc 报 `TS5083 Cannot read file` 和 `Cannot find module 'claude-code'`，结果不能用。`claude plugin test .` 能编译并运行全部 TS 文件，可以作为间接证据。
-- **macOS 沙箱（`sandbox-exec`）下的克隆路径：未运行。** 云端是 Linux。发现 2 的修复只做了代码审读和配置字符串的测试。
-- **`eval/run.mjs`、`eval/pressure.mjs`（真实模型 A/B）：未运行。** 需要真实端点和 API key，任务也明确说不跑。
+- **`npx tsc --noEmit`**：未运行成功。`tsconfig.json` 继承的是 `.claude-plugin/types/tsconfig.json`，这个文件要等 Claude Code 第一次加载插件时才会生成，仓库里没有，所以报 `TS5083 Cannot read file` 和 `Cannot find module 'claude-code'`。生成它需要一次能连上模型接口的真实会话，云端没有。
+- **`eval/run.mjs`**（真实模型 A/B）：要用 DeepSeek 的 API，没跑。
+- **macOS `sandbox-exec` 路径**：Linux 上没有，第 2、11 条只能读代码判断。
 
 ## 建议作者后续处理
 
-1. **在 macOS 上实测发现 2**：工作区放在 `/tmp/x` 下，跑一条 `touch /tmp/x/pwned` 和一条 `touch /private/tmp/x/pwned`，确认都被拒。
-2. **只读模式的读权限（发现 4）**：考虑只允许工作区内的相对路径（拒绝 `/`、`~`、`..` 开头的参数），或者至少在 README 的 Linux 说明里写明：Linux 上命令是在真实工作区、无沙箱下跑的，能读家目录。
-3. **只读过滤器是黑名单加白名单，本质上脆弱。** 这次把已知的绕过都堵上了，但更稳的做法是不经 `bash -c`：自己把命令切成 argv 直接 exec，只允许白名单工具和白名单参数。这个改动比较大，我没动。
-4. **eval 统计（发现 5、6）**：按 `CHECK {…}` 行重写 `pluginStats`，并在 `eval/README.md` 里标明结果对应的插件版本。
+1. **第 3 条（seen 淘汰）**：可以在 Track 里记一个「已扫描到第几条消息」，tick 时只扫新消息；或者用声明的哈希代替原文，去掉 200 条的上限。
+2. **第 7 条（读取外泄）**：可以考虑在沙箱配置里加 `(deny file-read* (subpath "~/.ssh") (subpath "~/.aws") …)`，或者在发出去之前过滤掉看起来像密钥的输出。
+3. **只读模式本身**：白名单过滤器终究是黑名单式的修补。如果要在 Linux 上跑得更稳，可以考虑 `bwrap` / `unshare` 只读挂载，或者干脆在 Linux 上关闭命令执行，只做规则检查。
+4. **第 8 条**：在 README 里写明「没有沙箱时，fixed 可以由验证者模型的判断给出」。
+5. **eval/README**：标注这些结果对应的插件版本，0.6.0 上重跑一遍。
+6. 让测试里的 mock 每次检查多调用几次模型，把第 4 条描述的预算语义真正测起来。
 
-## PR
+## 提交
 
-如果有权限，会从 `cloud-review` 开一个到 `main` 的 PR（不合并），链接见提交后的会话记录。没有权限的话，这里会写明。
+- `edaaf75` 关闭只读过滤器的命令注入
+- `55405cc` 沙箱同时禁写工作区解析后的真实路径
+- `8c661a3` README / 注释与代码对齐（预算、沙箱范围、测试数）
+- `116510b` eval 识别 0.6.0 的日志格式
+- `7f97346`、`74c928e` 只读过滤器（另一会话的独立实现，覆盖面更大，合并时采用）
+- `2823592` 沙箱禁写路径（cwd 和家目录）都加 realpath
+- `b6d61e7` 复查命令也过 `refusal()`
+- `b804d25` README 测试数
+- 合并提交：把两个会话的工作合到一起（普通 merge，不是 force push）
+
+没有改 LICENSE、版本号和 main。

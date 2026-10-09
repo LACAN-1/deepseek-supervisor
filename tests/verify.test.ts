@@ -124,6 +124,11 @@ test('commands stay in the copy; with no copy, only what cannot write runs', asy
     expect(refusal(c, 'read-only', '/p')).toContain('read-only')
   for (const c of ['sort a | uniq -c', 'uniq -f 2 a', 'find . -name "*.py" | wc -l', 'rg --pre-glob "*.gz" x', 'grep -c x a && echo ok'])
     expect(refusal(c, 'read-only', '/p')).toBeUndefined()
+  // Every piece's first word is a reader, yet each runs or writes something.
+  for (const c of ['cat a.py\npython3 x.py', 'cat a.py & python3 x.py', 'cat $(python3 x.py)', 'cat `python3 x.py`', 'cat <(python3 x.py)', 'find . -execdir python3 x.py {} +', 'find . -fprint out', 'rg --pre python3 x .', 'sort -o a.py a.py', 'uniq a.py b.py'])
+    expect(refusal(c, 'read-only', '/p')).toContain('read-only')
+  expect(refusal('sort a.txt | uniq -c; echo "exit=$?"', 'read-only', '/p')).toBeUndefined()
+  expect(refusal('test -f a.py && echo yes', 'read-only', '/p')).toBeUndefined()
 })
 
 test('a false verdict needs the command and the output behind it', async () => {
