@@ -47,6 +47,8 @@ export type Issue = {
   defect?: { expect: string; demonstrated: boolean }
   /** How many tool calls the session had made when the item was raised: runs after it are the ones that settle it. */
   pos?: number
+  /** Where the quote was said, for a claim: the same claim said later is a new one, said there again is not. */
+  said?: number
   /** What is actually so, in one plain sentence; never how to fix it. */
   what: string
   /** The model's own words the item is about. */
@@ -76,6 +78,8 @@ export type Track = {
   scanned?: number
   /** How many checks during the work called a model since the person's last prompt (each may make several calls). */
   runs: number
+  /** The last change the verifier read to the end, by its signature: the same lines are not read twice. */
+  reviewed?: string
 }
 
 /** What was last put to the model, drawn in the band above the prompt. */

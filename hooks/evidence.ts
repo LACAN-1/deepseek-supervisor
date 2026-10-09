@@ -41,11 +41,9 @@ const SPECIFIC = /\b\w*(?:Error|Exception)\b[:\s]|\b(?:Expected|Received|expecte
 const CHECKED = String.raw`(?:tests?|specs?|test suite|suite|builds?|checks?|lint(?:s|er)?|type ?checks?|tsc|ci)`
 const OUTCOME = String.raw`(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|successful(?:ly)?|clean(?:ly)?)`
 const CHECK_PASS = new RegExp(
-  String.raw`\b${CHECKED}\b[^.\n]{0,40}?\b${OUTCOME}\b|\b${OUTCOME}\b[^.\n]{0,12}?\b${CHECKED}\b|\bcompiles?\b|(?:测试|单测|用例|构建|编译|类型检查|检查)[^。\n]{0,10}(?:通过|全过|跑通|成功|全绿|绿了|没问题|无报错)|(?:全部|都)(?:通过|跑通)`,
+  String.raw`\b${CHECKED}\b[^.\n]{0,40}?\b${OUTCOME}\b|\b${OUTCOME}\b[^.\n]{0,12}?\b${CHECKED}\b|\bcompiles?\b|(?:测试|单测|用例|构建|编译|类型检查)[^。\n]{0,10}(?:通过|全过|跑通|成功|全绿|绿了|没问题|无报错)|(?:全部|都)(?:通过|跑通)`,
   'i',
 )
-const CHECK_CLAIM = CHECK_PASS
-const PASSED = CHECK_PASS
 // A plan, a hope or an honest "not yet" is no claim.
 // So is what held before: "the test passed before the edit" says nothing of now.
 const NOT_A_CLAIM =
@@ -82,6 +80,15 @@ const DONT_EN =
   /\b(?:do not|don't|dont|never|without)\s+(?:modify(?:ing)?|chang(?:e|ing)|touch(?:ing)?|edit(?:ing)?|alter(?:ing)?|delet(?:e|ing)|remov(?:e|ing)|rewrit(?:e|ing))\s+(?:the\s+|any\s+|anything\s+(?:in|under)\s+|files?\s+(?:in|under)\s+)*[`'"]?([\w][\w.\/-]*)[`'"]?/gi
 const DONT_ZH = /(?:不要|别|不准|禁止|不能|请勿|勿|不许|不可以)(?:去)?(?:修改|改动|更改|改|动|碰|编辑|删除|删|重写)(?:任何)?\s*[`'"「]?([\w][\w.\/-]*)[`'"」]?/g
 const DIRS = /^(?:tests?|src|lib|docs?|vendor|migrations?|generated|dist|build|config|scripts?)\/?$/
+// A later "now change config.yaml" / "可以改 tests/ 了": the change verb on the target itself.
+// "Fix the code so the tests pass" names the tests, and lifts nothing.
+const allows = (text: string, target: string) => {
+  const t = target.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+  return new RegExp(
+    String.raw`\b(?:modify|change|edit|update|touch|rewrite|alter|fix)\s+(?:the\s+|files?\s+(?:in|under)\s+)?[\x60'"]?${t}(?!\w|\.\w)|(?:修改|改动|更改|改|动|编辑|更新|修复|重写)\s*[\x60'"「]?${t}(?!\w|\.\w)`,
+    'i',
+  ).test(text)
+}
 
 export type CheckRun = { at: number; command: string; ok: boolean; line: string; text: string }
 export type BashRun = { at: number; key: string; ok: boolean; sig: string; text: string }
@@ -182,7 +189,7 @@ export const evidenceOf = (rows: readonly Row[]): Evidence => {
         }
       }
       if (u.tool === 'Agent' || u.tool === 'Task') ev.blind.push(at)
-      if (u.tool === 'Bash' && failed && DENIED.test(u.text ?? '') && (isCheckCommand(str(input, 'command')) || MENTIONS_CHECK.test(str(input, 'command'))))
+      if (u.tool === 'Bash' && failed && DENIED.test(u.text ?? '') && isCheckCommand(str(input, 'command')))
         ev.refused.push({ at, command: clip(squash(str(input, 'command')), 120) })
       if (u.tool === 'Bash' && !(failed && DENIED.test(u.text ?? ''))) {
         const command = str(input, 'command')
@@ -248,13 +255,13 @@ export const contradictions = (ev: Evidence, claims: readonly string[]): Finding
     // A subagent ran somewhere before the claim: what it ran is not here to hold the claim to.
     const isBlind = ev.blind.some(b => b < at)
 
-    if (CHECK_CLAIM.test(quote) && PASSED.test(quote) && !isBlind) {
+    if (CHECK_PASS.test(quote) && !isBlind) {
       const last = ev.runs.filter(r => r.at < at).at(-1)
       const lastEdit = ev.edits.filter(e => e.at < at && isCode(e.path)).at(-1)
       if (last === undefined) {
         // A command named for tests or checks ran: the project's own runner, maybe. Say nothing.
         if (ev.mentioned) continue
-        found.push({ kind: 'no-check', what: 'No test, build or check command has run in this session, yet the work is said to pass.', quote, probe: 'Run the project\'s tests', recheck: '' })
+        found.push({ kind: 'no-check', what: 'No test, build or check command has run in this session, yet you report how they came out.', quote, probe: 'Run the project\'s tests', recheck: '' })
         continue
       }
       if (!last.ok) {
@@ -284,11 +291,11 @@ export const contradictions = (ev: Evidence, claims: readonly string[]): Finding
 export const isClaim = (s: string) => !NOT_A_CLAIM.test(s)
 
 /** Whether a claim is that the tests, the build or a check pass: the record's to judge, not a model's. */
-export const isCheckClaim = (s: string) => CHECK_CLAIM.test(s) && PASSED.test(s)
+export const isCheckClaim = (s: string) => CHECK_PASS.test(s)
 
 /** Whether the record already bears a claim out: a pass claimed after a passing run, with no edit to code since. No need to ask a model. */
 export const supports = (ev: Evidence, claim: string) => {
-  if (NOT_A_CLAIM.test(claim) || !CHECK_CLAIM.test(claim) || !PASSED.test(claim)) return false
+  if (NOT_A_CLAIM.test(claim) || !CHECK_PASS.test(claim)) return false
   const at = ev.saidAt.get(claim) ?? Number.MAX_SAFE_INTEGER
   if (ev.blind.some(b => b < at)) return false
   const last = ev.runs.filter(r => r.at < at).at(-1)
@@ -378,7 +385,7 @@ export const recordFindings = (ev: Evidence): Finding[] => {
   }
 
   // A file or folder the person said not to touch, edited after they said so.
-  for (const p of ev.prompts) {
+  for (const [i, p] of ev.prompts.entries()) {
     for (const m of [...p.text.matchAll(DONT_EN), ...p.text.matchAll(DONT_ZH)]) {
       const target = (m[1] ?? '').replace(/[.,;:!?。，；：！？]+$/, '')
       if (!(/\.\w+$/.test(target) || target.endsWith('/') || DIRS.test(target))) continue
@@ -386,7 +393,9 @@ export const recordFindings = (ev: Evidence): Finding[] => {
       const isFile = /\.\w+$/.test(target) && !target.endsWith('/')
       const matches = (path: string) =>
         isFile ? (target.includes('/') ? path === target || path.endsWith(`/${target}`) : base(path) === target) : path.includes(`/${dir}/`) || path.startsWith(`${dir}/`)
-      const hit = ev.edits.find(e => e.at >= p.at && matches(e.path))
+      // A later prompt asking for that very file or folder to change lifts this one.
+      const lifted = ev.prompts.slice(i + 1).find(q => allows(q.text, dir) && ![...q.text.matchAll(DONT_EN), ...q.text.matchAll(DONT_ZH)].some(x => (x[1] ?? '').startsWith(dir)))
+      const hit = ev.edits.find(e => e.at >= p.at && (lifted === undefined || e.at < lifted.at) && matches(e.path))
       if (hit !== undefined) found.push({ kind: 'ignored-constraint', what: `You were asked not to change ${target}, and an edit changed ${base(hit.path)}.`, quote: clip(squash(m[0]), 200), probe: `Undo the change to ${hit.path}, or tell the person why it could not be avoided`, recheck: '' })
     }
   }
@@ -394,14 +403,16 @@ export const recordFindings = (ev: Evidence): Finding[] => {
 }
 
 // The person asking for the checks to be run: "run the tests", "run the whole suite", 跑一下测试.
-const ASKS_TO_RUN = /\b(?:run|re-?run|execute)\b[^.\n]{0,40}\b(?:tests?|test suite|suite|specs?|checks?|build|linter|type ?check)\b|(?:跑|运行|执行)[^。\n]{0,8}(?:测试|单测|用例|检查|构建)/i
+// "Don't run the tests" is not that.
+const ASKS_TO_RUN = /\b(?:run|re-?run|execute)\b[^.\n]{0,40}\b(?:tests?|test suite|suite|specs?|checks?|build|linter|type ?check)\b|(?:跑|运行|执行)[^。\n]{0,8}(?:测试|单测|用例|检查|构建)/gi
+const asksToRun = (text: string) => [...text.matchAll(ASKS_TO_RUN)].some(m => !NEGATED.test(text.slice(Math.max(0, (m.index ?? 0) - 24), m.index)))
 // An answer that says the checks did not run: owning up to that is the point.
 const SAYS_NOT_RUN = /\b(?:not|never|couldn'?t|could not|unable to|wasn'?t able to)\b[^.\n]{0,30}\b(?:run|ran|execute|executed)\b|n['’]t\b[^.\n]{0,30}\b(?:run|ran|execute|executed)\b|\bwithout running\b|\b(?:approval|permission)\b|未(?:能)?运行|没(?:有)?(?:跑|运行)|无法运行|跑不了/i
 
 /** At the end of a turn: the person asked for the checks to be run, none ran this turn, and the answer does not say so. */
 export const skipped = (ev: Evidence, answer: string): Finding[] => {
   const prompt = ev.prompts.at(-1)
-  if (prompt === undefined || !ASKS_TO_RUN.test(prompt.text) || SAYS_NOT_RUN.test(answer) || ev.blind.some(b => b >= prompt.at)) return []
+  if (prompt === undefined || !asksToRun(prompt.text) || SAYS_NOT_RUN.test(answer) || ev.blind.some(b => b >= prompt.at)) return []
   if (ev.runs.some(r => r.at >= prompt.at)) return []
   const tried = ev.refused.filter(r => r.at >= prompt.at).map(r => `\`${r.command}\``)
   return [
@@ -418,7 +429,7 @@ export const skipped = (ev: Evidence, answer: string): Finding[] => {
 /** At the end of a turn: a check run this turn that failed, with nothing passing since, and an answer that does not say so. */
 export const unreported = (ev: Evidence, answer: string): Finding[] => {
   // An answer that claims the checks pass is the claim rules' to hold to the record.
-  if (claimsOf(answer).some(c => !NOT_A_CLAIM.test(c) && CHECK_CLAIM.test(c) && PASSED.test(c))) return []
+  if (claimsOf(answer).some(c => !NOT_A_CLAIM.test(c) && CHECK_PASS.test(c))) return []
   const since = ev.prompts.at(-1)?.at ?? 0
   const last = ev.runs.filter(r => r.at >= since).at(-1)
   if (last === undefined || last.ok || OWNS_UP.test(answer) || ev.blind.some(b => b > last.at)) return []

@@ -217,6 +217,14 @@ const ask = async ($: EngineInterface, prompt: string, timeoutMs = 180_000) => {
 const quoted = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 const absentFrom = (probe: string, expect: string) => `! ( ${probe} ) 2>&1 | grep -qF -- ${quoted(expect)}`
 
+// A change, told apart from another by its length and an FNV-1a hash: what is kept to
+// know the verifier read it, without keeping the change.
+const signatureOfChange = (s: string) => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193)
+  return `${s.length}:${(h >>> 0).toString(16)}`
+}
+
 /**
  * Checks claims by running commands, and reads the turn's change for a defect a
  * command can show. Open items that carry a recheck are settled by code first:
@@ -353,7 +361,7 @@ const isKnown = (f: Finding, items: readonly Issue[], saidAt: (quote: string) =>
       default:
         return (
           (i.status === 'open' && isCheckKind(i.rule) && i.rule !== 'unreported-failure' && i.rule !== 'skipped-check') ||
-          (isSameItem({ quote: f.quote }, i) && (i.status === 'open' || saidAt(f.quote) < (i.pos ?? Number.MAX_SAFE_INTEGER)))
+          (isSameItem({ quote: f.quote }, i) && (i.status === 'open' || saidAt(f.quote) <= (i.said ?? (i.pos ?? Number.MAX_SAFE_INTEGER) - 1)))
         )
     }
   })
@@ -416,7 +424,10 @@ const check = async ($: EngineInterface, list: Rows, o: CheckOptions): Promise<I
   const isCurrent = (c: string) => (record.saidAt.get(c) ?? Number.MAX_SAFE_INTEGER) > lastCodeEdit
   // Plans and honest failures are no claims to check.
   const handed = canRun ? o.claims.filter(c => isClaim(c) && !ruled.some(f => f.quote === c) && !supports(record, c) && isCurrent(c)) : []
-  const changes = canRun && o.kind === 'answer' && cfg.reviewChanges ? changesOf(record) : ''
+  // A change the verifier already read to the end is not read again: a second review of
+  // the same lines costs a call, and can only disagree with the first.
+  const turnChanges = canRun && o.kind === 'answer' && cfg.reviewChanges ? changesOf(record) : ''
+  const changes = turnChanges !== '' && signatureOfChange(turnChanges) === before.reviewed ? '' : turnChanges
   const rechecks = o.verifier && open.some(i => (i.recheck ?? '') !== '')
   const stillUnopened = new Set(facts.unopened)
   const images = unopenedClaimed(facts, o.claims)
@@ -454,9 +465,11 @@ const check = async ($: EngineInterface, list: Rows, o: CheckOptions): Promise<I
     const fresh: Issue[] = []
     const next = () => t.nextId + fresh.length
     for (const f of o.rules === false ? [] : ruled) {
-      // A claim not in the record yet is the answer being given now: said after everything.
+      // A claim not in the record yet is the answer being given now: said after everything,
+      // and once it lands, at the end of the record as it is now.
       if (isKnown(f, [...issues, ...fresh], q => record.saidAt.get(q) ?? Number.MAX_SAFE_INTEGER)) continue
-      fresh.push({ id: next(), at: done, from: 'rule', rule: f.kind, what: f.what, quote: f.quote, probe: f.probe, ...(f.saw === undefined ? {} : { saw: f.saw }), ...(f.recheck === '' ? {} : { recheck: f.recheck }), cost: COST[f.kind], status: 'open', pos: record.end })
+      const said = record.saidAt.get(f.quote) ?? record.end
+      fresh.push({ id: next(), at: done, from: 'rule', rule: f.kind, what: f.what, quote: f.quote, probe: f.probe, ...(f.saw === undefined ? {} : { saw: f.saw }), ...(f.recheck === '' ? {} : { recheck: f.recheck }), cost: COST[f.kind], status: 'open', pos: record.end, said })
     }
     for (const p of (v?.probes ?? []).filter(p => p.verdict === 'false')) {
       if ([...issues, ...fresh].some(i => isSameItem({ quote: p.claim }, i))) continue
@@ -486,7 +499,8 @@ const check = async ($: EngineInterface, list: Rows, o: CheckOptions): Promise<I
     found = fresh
     issues = [...issues, ...fresh].slice(-ISSUES_KEPT)
     const ran = v !== undefined && v.cost.calls > 0 && o.kind === 'during'
-    return { ...t, nextId: t.nextId + fresh.length, issues, seen: [...(t.seen ?? []), ...handed].slice(-SEEN_KEPT), runs: (t.runs ?? 0) + (ran ? 1 : 0) }
+    const readToEnd = v !== undefined && v.reason === undefined && changes !== ''
+    return { ...t, nextId: t.nextId + fresh.length, issues, seen: [...(t.seen ?? []), ...handed].slice(-SEEN_KEPT), runs: (t.runs ?? 0) + (ran ? 1 : 0), ...(readToEnd ? { reviewed: signatureOfChange(changes) } : {}) }
   })
   if (v !== undefined || found.length > 0)
     await remember($, {

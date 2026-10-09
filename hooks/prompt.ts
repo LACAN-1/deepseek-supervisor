@@ -218,11 +218,16 @@ export const sanitize = (s: string) =>
 // run a command inside another, or read credentials. A defect whose probe does any of
 // that is not passed on: the verifier read the project, which may hold anything.
 const PROBE_FORBIDS =
-  /\b(?:curl|wget|nc|ncat|netcat|ssh|scp|sftp|rsync|ftp|telnet|sudo|su|doas|rm|rmdir|mv|chmod|chown|chgrp|dd|mkfs|shred|truncate|kill|pkill|killall|crontab|pip3?|npm\s+(?:i|install|publish)|yarn\s+add|apt(?:-get)?|brew|git\s+(?:push|reset|clean|checkout|commit))\b|\|\s*(?:ba|z|da)?sh\b|>|\$\(|`|\beval\b|\bexec\b|\bopen\(|\bos\.(?:system|remove|unlink|rmdir|rename)|\bshutil\.|\bsubprocess\b|\bsocket\b|\burllib\b|\brequests\b|__\w+__|\bimportlib\b|\bgetattr\s*\(|\bcompile\s*\(|\.(?:unlink|rmdir|write_text|write_bytes|touch|mkdir|chmod)\s*\(|\bchild_process\b|\bfs\.\w*(?:write|unlink|rm)/i
+  /\b(?:curl|wget|nc|ncat|netcat|ssh|scp|sftp|rsync|ftp|telnet|sudo|su|doas|rm|rmdir|mv|chmod|chown|chgrp|dd|mkfs|shred|truncate|kill|pkill|killall|crontab|pip3?|npm\s+(?:i|install|publish)|yarn\s+add|apt(?:-get)?|brew|git\s+(?:push|reset|clean|checkout|commit))\b|\|\s*(?:ba|z|da)?sh\b|>|\$\(|`|\beval\b|\bexec\b|\bopen\(|\bos\.(?:system|remove|unlink|rmdir|rename|replace|symlink|link|startfile|write)|\bshutil\.|\bsubprocess\b|\bsocket\b|\burllib\b|\brequests\b|__\w+__|\bimportlib\b|\bgetattr\s*\(|\bcompile\s*\(|\.(?:unlink|rmdir|rmtree|write\w*|touch|mkdir|chmod|rename|replace|symlink_to|hardlink_to)\s*\(|\bchild_process\b|\bfs\.\w*(?:write|unlink|rm)|\b(?:system|popen|\w*spawn\w*|fork\w*|exec[lv]\w*|kill\w*|environ|getenv|putenv|ctypes|pty|pickle|marshal|ftplib|smtplib|telnetlib|WebSocket|XMLHttpRequest|HTTPS?Connection)\b|\bhttp\.client\b|\b(?:fetch|import|Function)\s*\(|\brequire\s*\(\s*['"](?:node:)?(?:fs|child_process|net|http|https|os|process|vm|worker_threads|dgram|tls)['"]|\bprocess\.(?:env|binding|kill|exit)/i
+// Standard modules a probe's one line may not import: what reaches the system, the
+// network, the files or the interpreter itself.
+const DANGEROUS_MODULE = String.raw`(?:os|sys|subprocess|shutil|socket|ctypes|pathlib|importlib|builtins|pty|signal|multiprocessing|threading|http|urllib|urllib3|requests|ftplib|telnetlib|smtplib|pickle|marshal|io|tempfile|glob|asyncio|code|codeop|runpy|webbrowser)\b`
 // What a probe may be: one import-and-print line of Python or JavaScript, or one script of
 // the workspace run by name (a relative path, no `..`). The project's own checks are
 // allowed by the caller, which knows them.
-const PY_LINE = /^python3?\s+-c\s+(["'])\s*(?:(?:from\s+[\w.]+\s+import\s+[\w, ]+|import\s+[\w., ]+)\s*;\s*)*print\((?:(?!\1).)*\)\s*;?\s*\1$/
+const PY_LINE = new RegExp(
+  String.raw`^python3?\s+-c\s+(["'])\s*(?:(?:from\s+(?!${DANGEROUS_MODULE})[\w.]+\s+import\s+[\w, ]+|import\s+(?!${DANGEROUS_MODULE})[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*(?!${DANGEROUS_MODULE})[\w.]+(?:\s+as\s+\w+)?)*)\s*;\s*)*print\((?:(?!\1).)*\)\s*;?\s*\1$`,
+)
 const NODE_LINE = /^node\s+-e\s+(["'])\s*console\.log\((?:(?!\1).)*\)\s*;?\s*\1$/
 const SCRIPT = /^(?:python3?|node|bash|sh)\s+(?!\/|~|\.\.)[\w./-]+\.(?:py|js|mjs|sh)(?:\s+[\w.,=:-]+)*$/
 export const isPlainProbe = (command: string) => [PY_LINE, NODE_LINE, SCRIPT].some(re => re.test(command.trim())) && !/\.\.\//.test(command)

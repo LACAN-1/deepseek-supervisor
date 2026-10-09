@@ -727,3 +727,40 @@ test('live: the same claim said again after its item closed is raised again; the
   w.state.rows = [...w.state.rows, failingRun('b', 'AssertionError: 1 != 2'), claimRow('n3', 'All tests pass.')]
   expect((await batch($)).additionalContext?.[0]).toContain('#2 The last check run failed')
 })
+
+// Round 4 of the live eval: the answer held for "no check ran" landed in the record at
+// the position the hold was raised at, and the run it asked for brought it back as new.
+test('live: an answer held for "no check ran" is not raised again once the run it asked for lands', async ($, on) => {
+  const answer = '**Overall: 1 of 2 tests pass.** The timeout increase breaks test_settings.'
+  const w = world(on, [{ role: 'user', text: 'raise the timeout; tell me whether the tests pass', toolUses: [] }, editRow('e', '/p/config.py', 'TIMEOUT = 30', 'TIMEOUT = 60')])
+  w.state.noSandbox = true
+  await start($)
+  await prompt($, 'raise the timeout; tell me whether the tests pass')
+  expect((await stop($, answer)).block).toContain('#1 No test, build or check command has run')
+  w.state.rows = [...w.state.rows, { role: 'assistant', text: answer, toolUses: [] }, failingRun('a', "AssertionError: {'timeout': 30} != {'timeout': 60}")]
+  expect((await batch($)).additionalContext ?? []).toEqual([])
+  expect(await issues($)).toContain('#1 [fixed] (no-check)')
+  // Said again after that run, it is a new claim, held to the run that failed.
+  w.state.rows = [...w.state.rows, { role: 'assistant', text: answer, toolUses: [] }]
+  expect((await stop($, answer, true)).block).toContain('#2 The last check run failed')
+})
+
+// Round 4 of the live eval: a held turn's second and third answers sent the same change
+// to the reviewer each time.
+test('a change the reviewer read to the end is not read again; one edited since is', async ($, on) => {
+  const w = world(on, changed())
+  w.state.noSandbox = true
+  await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: false })
+  await prompt($, 'add average(prices); carts can be empty')
+  await stop($, 'Added average().')
+  expect(w.asked[0]).toContain('## What the assistant changed this turn')
+  // The answer again, the change as it was: no review, and with no new claim to check, no call.
+  await stop($, 'Added average().', true)
+  expect(w.asked.length).toBe(1)
+  // An edit since: the change is new, and read.
+  w.state.rows = [...w.state.rows, editRow('f', '/p/shop.py', AVG, 'return sum(prices) / len(prices) if prices else 0')]
+  await prompt($, 'and the empty cart?')
+  await stop($, 'An empty cart now averages to 0.')
+  expect(w.asked.length).toBe(2)
+  expect(w.asked[1]).toContain('if prices else 0')
+})
