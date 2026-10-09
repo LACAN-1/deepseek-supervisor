@@ -43,7 +43,7 @@ export type Track = {
   issues: Issue[]
   /** The model's claims already handed to the verifier, so none is checked twice. */
   seen: string[]
-  /** How many times the verifier called a model since the person's last prompt. */
+  /** How many checks during the work called a model since the person's last prompt (each may make several calls). */
   runs: number
 }
 

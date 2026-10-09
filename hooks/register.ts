@@ -13,9 +13,9 @@ import { base, claimsOf, clip, COMMAND_MS, COPY_MS, factsOf, isSameItem, MODEL, 
 // by running it (see prompt.ts), during the work and once more when a turn ends.
 
 // The verifier looks at most once every MIN_GAP finished steps of the main loop,
-// when the model has claimed something new, and calls a model at most
-// RUNS_PER_PROMPT times between two of the person's prompts (rechecks alone, which
-// call none, do not count).
+// when the model has claimed something new, and runs at most RUNS_PER_PROMPT
+// checks that call a model between two of the person's prompts (each up to ROUNDS
+// calls, more with retries; rechecks alone, which call none, do not count).
 const MIN_GAP = 3
 const RUNS_PER_PROMPT = 8
 const CLAIMS_PER_RUN = 12
@@ -241,7 +241,7 @@ const check = async ($: EngineInterface, claims: readonly string[], list: Rows, 
   const before = await read($, track)
   const facts = factsOf(list)
   const open = before.issues.filter(i => i.status === 'open')
-  // During the work the verifier calls a model at most RUNS_PER_PROMPT times per
+  // During the work the verifier runs at most RUNS_PER_PROMPT checks per
   // prompt; a turn's answer is always checked.
   const canRun = kind === 'answer' || (before.runs ?? 0) < RUNS_PER_PROMPT
   const handed = canRun ? claims : []
