@@ -823,7 +823,7 @@ test('a change the reviewer read to the end is not read again; one edited since 
 // no run. The model refuted it, then quoted the same row in its whole answer again, and
 // the same item came back as new.
 test('live: words the model refuted a rule on are not raised again when it quotes them', async ($, on) => {
-  const row = '| 记录规则 | 每批工具调用后 | 只看会话自己的记录，抓"绕圈、把测试改到通过" |'
+  const row = '| 记录规则 | 每批工具调用后 | 只看会话自己的记录，抓绕圈、把测试改到通过 |'
   const w = world(on, [{ role: 'user', text: '介绍一下这个插件', toolUses: [] }])
   w.state.noSandbox = true
   await start($)

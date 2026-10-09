@@ -17,7 +17,7 @@ type Row = { role: string; text: string; toolUses?: readonly Use[] }
 const PYTHON = String.raw`python3?(?:\.\d+)?(?:\s+-[A-Za-z]+|\s+-[XW]\s*\S+)*?`
 const RUNNER = new RegExp(String.raw`^(?:(?:sudo|time|nice|timeout\s+\S+|env\s+\S+=\S*|\w+=\S*|uv run|poetry run|pipenv run|hatch run|npx|pnpm exec|bunx|${PYTHON}\s+-m|py\s+-m|coverage\s+run(?:\s+--?[\w-]+(?:=\S+)?)*?\s+-m)\s+)*`)
 const CHECK =
-  /^(?:pytest|py\.test|unittest|nose2|tox|nox|jest|vitest|mocha|ava|rspec|phpunit|ctest|tsc|mypy|pyright|ruff|flake8|pylint|eslint|go (?:test|build|vet)|cargo (?:test|build|check|clippy)|(?:npm|pnpm|yarn|bun) (?:run )?(?:test|build|lint|check|typecheck)|deno test|bun test|node --test|dotnet (?:test|build)|swift (?:test|build)|mvn|gradle|\.\/gradlew|make|bazel test|claude plugin test|python3?(?:\.\d+)?(?:\s+-[A-Za-z]+)*\s+(?:[\w./-]*\/)?(?:test_[\w-]*|[\w-]*_test|tests?)\.py|(?:(?:ba)?sh\s+|\.\/)[\w./-]*(?:run[_-]?)?tests?[\w-]*\.sh)(?=\s|$)/
+  /^(?:pytest|py\.test|unittest|nose2|tox|nox|jest|vitest|mocha|ava|rspec|phpunit|ctest|tsc|mypy|pyright|ruff|flake8|pylint|eslint|go (?:test|build|vet)|cargo (?:test|build|check|clippy)|(?:npm|pnpm|yarn|bun) (?:run )?(?:test|build|lint|check|typecheck)|deno test|bun test|node --test|dotnet (?:test|build)|swift (?:test|build)|mvn|gradle|\.\/gradlew|make|bazel test|\S+ plugin (?:test|validate)|python3?(?:\.\d+)?(?:\s+-[A-Za-z]+)*\s+(?:[\w./-]*\/)?(?:test_[\w-]*|[\w-]*_test|tests?|[\w-]*selftest[\w-]*)\.py|(?:node|bun|deno run|tsx|ts-node)(?:\s+--?[\w-]+)*\s+(?:[\w./-]*\/)?[\w.-]*(?:test|spec)[\w.-]*\.[cm]?[jt]sx?|(?:(?:ba)?sh\s+|\.\/)[\w./-]*(?:run[_-]?)?tests?[\w-]*\.sh)(?=\s|$)/
 const pieces = (command: string) => command.split(/&&|\|\||[;|\n]/).map(p => p.trim().replace(RUNNER, ''))
 export const isCheckCommand = (command: string) => pieces(command).some(p => CHECK.test(p))
 // What each piece of a command runs, by file name: the program and what it is given
@@ -33,7 +33,7 @@ const runnerNames = (command: string) =>
 // the test cases (live, round 5): it calls a test runner, or the tests' own module. Calling the
 // functions by hand is not that.
 const INLINE_TESTS =
-  /^\s*(?:cd\s+[^\n;&|]+&&\s*)?(?:python3?(?:\.\d+)?|node)(?:\s+-[A-Za-z]+)*\s+(?:-[ce]\b|-?\s*<<)[\s\S]*?(?:\b(?:unittest\.main|TextTestRunner|pytest\.main)\s*\(|\bfrom\s+(?:[\w.]+\.)?test_\w+\s+import\b|\bimport\s+(?:[\w.]+\.)?test_\w+|\brequire\s*\(\s*['"][^'"]*(?:test|spec)[^'"]*['"])/
+  /^\s*(?:cd\s+[^\n;&|]+&&\s*)?(?:python3?(?:\.\d+)?|node)(?:\s+-[A-Za-z]+)*\s+(?:-[ce]\b|-?\s*<<)[\s\S]*?(?:\b(?:unittest\.main|TextTestRunner|pytest\.main)\s*\(|\bfrom\s+(?:[\w.]+\.)?test_\w+\s+import\b|\bimport\s+(?:[\w.]+\s*(?:as\s+\w+\s*)?,\s*)*(?:[\w.]+\.)?test_\w+|\brequire\s*\(\s*['"][^'"]*(?:test|spec)[^'"]*['"])/
 const runsTests = (command: string) => isCheckCommand(command) || INLINE_TESTS.test(command)
 // Code the model wrote inline is its own check, not a runner of the project's the rules do
 // not know: calling the function a test calls and comparing the value is no run of the tests.
@@ -69,6 +69,15 @@ const CHECK_PASS = new RegExp(
   String.raw`\b${CHECKED}\b[^.\n]{0,40}?\b${OUTCOME}\b|\b${OUTCOME}\b[^.\n]{0,12}?\b${CHECKED}\b|\bcompiles?\b|(?:测试|单测|用例|构建|编译|类型检查)[^。\n]{0,10}(?:通过|全过|跑通|成功|全绿|绿了|没问题|无报错)|(?:全部|都)(?:通过|跑通)`,
   'i',
 )
+// A pass phrase inside quotes is someone else's words: a UI's `8 tests passing`, a rule
+// that catches "把测试改到通过", what a handover says (2026-10-09). The claim is outside them.
+const QUOTED = /`[^`\n]*`|"[^"\n]*"|“[^”\n]*”|「[^」\n]*」|『[^』\n]*』/g
+const claimsPass = (s: string) => CHECK_PASS.test(s.replace(QUOTED, q => (CHECK_PASS.test(q) ? ' ' : q)))
+// What names the tests or the build, not checks in general: a check of the model's own
+// (a script that counts the sentences, json.load) passing is no claim about the tests.
+const NAMES_TESTS = /\b(?:tests?|specs?|suite|builds?|lint\w*|tsc|type ?checks?|ci|test_\w+|\w+_test)\b|测试|单测|用例|构建|编译|类型检查/i
+// A command that runs code: the model checking something its own way.
+const RUNS_CODE = /^(?:python3?(?:\.\d+)?|node|bun|deno|ruby|perl|php|tsx|ts-node|(?:ba|z)?sh\s+\S|\.\/\S)/
 // A plan, a hope or an honest "not yet" is no claim; nor is how to check ("to verify the
 // tests pass, run …") or that it could not be ("I cannot provide evidence that it passes").
 // So is what held before: "the test passed before the edit" says nothing of now.
@@ -134,6 +143,8 @@ export type Evidence = {
   removed: { at: number; path: string }[]
   /** Files this session made with Write over nothing it knew of: its own scratch, by name. */
   created: Set<string>
+  /** Where a command ran code: python, node, a script. */
+  coded: number[]
   /** Positions where a subagent ran: what it ran is not in this transcript. */
   blind: number[]
   /** Every basename any tool call or result names. */
@@ -181,7 +192,7 @@ const isPerson = (r: Row) => r.role === 'user' && r.text.trim() !== '' && !r.tex
 // The session's main loop as a sequence of tool calls, each with its position; a
 // row's text is said before the row's own tool calls run.
 export const evidenceOf = (rows: readonly Row[]): Evidence => {
-  const ev: Evidence = { runs: [], bash: [], edits: [], misses: [], reads: [], changes: [], removed: [], created: new Set(), blind: [], named: new Set(), saidAt: new Map(), prompts: [], end: 0, mentioned: false, refused: [] }
+  const ev: Evidence = { runs: [], bash: [], edits: [], misses: [], reads: [], changes: [], removed: [], created: new Set(), coded: [], blind: [], named: new Set(), saidAt: new Map(), prompts: [], end: 0, mentioned: false, refused: [] }
   // The last text known of each file, so a Write can be held against what it replaced.
   const known = new Map<string, string>()
   let at = 0
@@ -225,11 +236,16 @@ export const evidenceOf = (rows: readonly Row[]): Evidence => {
       if (u.tool === 'Bash' && !(failed && DENIED.test(u.text ?? ''))) {
         const command = str(input, 'command')
         const mine = (name: string) => ev.edits.some(e => base(e.path) === base(name))
-        if (!INLINE_CODE.test(command) && runnerNames(command).some(n => n !== '' && MENTIONS_CHECK.test(n) && !mine(n))) ev.mentioned = true
+        // The project's own check (`./bin/ccds-check`, `bash ci.sh`) is a run too: its pass
+        // settles a failure before it (2026-10-09), and its failure is one.
+        const ownCheck = !INLINE_CODE.test(command) && runnerNames(command).some(n => n !== '' && MENTIONS_CHECK.test(n) && !mine(n))
+        if (ownCheck) ev.mentioned = true
+        if (pieces(command).some(p => RUNS_CODE.test(p))) ev.coded.push(at)
+        for (const t of command.matchAll(/(?:>|\btee\s+(?:-a\s+)?)\s*["']?([^\s"'<>|;&]+)/g)) if (t[1] !== undefined && !/^&?\d$|^\/dev\//.test(t[1])) ev.created.add(base(t[1]))
         const ok = !failed && !FAILED.test(out)
         ev.bash.push({ at, key: keyOf(command), ok, sig: ok ? '' : signatureOf(out), text: clip(out, 4000) })
         // The line a note shows is the one that says what failed, not "Exit code 1".
-        if (runsTests(command) && !MISSING.test(out)) ev.runs.push({ at, command: clip(squash(command), 200), ok, line: ok ? '' : clip(signatureOf(out), 160), text: ok ? '' : clip(out, 4000) })
+        if ((runsTests(command) || ownCheck) && !MISSING.test(out)) ev.runs.push({ at, command: clip(squash(command), 200), ok, line: ok ? '' : clip(signatureOf(out), 160), text: ok ? '' : clip(out, 4000) })
         // A test file removed from the shell.
         for (const p of pieces(command)) {
           const m = /^(?:git\s+)?rm\s+(.+)$/.exec(p)
@@ -291,12 +307,15 @@ export const contradictions = (ev: Evidence, claims: readonly string[]): Finding
     // A subagent ran somewhere before the claim: what it ran is not here to hold the claim to.
     const isBlind = ev.blind.some(b => b < at)
 
-    if (CHECK_PASS.test(quote) && !isBlind) {
+    if (claimsPass(quote) && !isBlind) {
       const last = ev.runs.filter(r => r.at < at).at(-1)
       const lastEdit = ev.edits.filter(e => e.at < at && isCode(e.path)).at(-1)
       if (last === undefined) {
         // A command named for tests or checks ran: the project's own runner, maybe. Say nothing.
         if (ev.mentioned) continue
+        // "Checks pass" in a session with no test file in sight, after code ran: the model's
+        // own check (a JSON load, a count). Where tests are around, "checks" means them.
+        if (!NAMES_TESTS.test(quote) && ev.coded.some(c => c < at) && ![...ev.named].some(n => TEST_FILE.test(n))) continue
         found.push({ kind: 'no-check', what: 'No test, build or check command has run in this session, yet you report how they came out.', quote, probe: 'Run the project\'s tests', recheck: '' })
         continue
       }
@@ -327,11 +346,11 @@ export const contradictions = (ev: Evidence, claims: readonly string[]): Finding
 export const isClaim = (s: string) => !NOT_A_CLAIM.test(s)
 
 /** Whether a claim is that the tests, the build or a check pass: the record's to judge, not a model's. */
-export const isCheckClaim = (s: string) => CHECK_PASS.test(s)
+export const isCheckClaim = (s: string) => claimsPass(s)
 
 /** Whether the record already bears a claim out: a pass claimed after a passing run, with no edit to code since. No need to ask a model. */
 export const supports = (ev: Evidence, claim: string) => {
-  if (NOT_A_CLAIM.test(claim) || !CHECK_PASS.test(claim)) return false
+  if (NOT_A_CLAIM.test(claim) || !claimsPass(claim)) return false
   const at = ev.saidAt.get(claim) ?? Number.MAX_SAFE_INTEGER
   if (ev.blind.some(b => b < at)) return false
   const last = ev.runs.filter(r => r.at < at).at(-1)
@@ -465,7 +484,7 @@ export const skipped = (ev: Evidence, answer: string): Finding[] => {
 /** At the end of a turn: a check run this turn that failed, with nothing passing since, and an answer that does not say so. */
 export const unreported = (ev: Evidence, answer: string): Finding[] => {
   // An answer that claims the checks pass is the claim rules' to hold to the record.
-  if (claimsOf(answer).some(c => !NOT_A_CLAIM.test(c) && CHECK_PASS.test(c))) return []
+  if (claimsOf(answer).some(c => !NOT_A_CLAIM.test(c) && claimsPass(c))) return []
   const since = ev.prompts.at(-1)?.at ?? 0
   const last = ev.runs.filter(r => r.at >= since).at(-1)
   if (last === undefined || last.ok || OWNS_UP.test(answer) || ev.blind.some(b => b > last.at)) return []
