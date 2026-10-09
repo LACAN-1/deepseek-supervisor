@@ -4,13 +4,13 @@
     "name": "LACAN-1"
   },
   "metadata": {
-    "description": "deepseek-supervisor: checks what Claude Code on a third-party model claims, by running it"
+    "description": "deepseek-supervisor: a supervisor for Claude Code on a weaker third-party model, from evidence: the session's own record, and a second model running things"
   },
   "plugins": [
     {
       "name": "deepseek-supervisor",
       "source": "./",
-      "description": "A check for Claude Code on a third-party model such as DeepSeek: when the model claims something is done, passing or right, a verifier runs the cheapest command that would show it false in a throwaway copy of the workspace, and hands the model the output"
+      "description": "A supervisor for Claude Code on a weaker model such as DeepSeek: rules on what the model ran catch circles, bent tests and claims the record contradicts; a second, stronger model runs its claims and reviews its changes; what does not hold goes back to the model before the turn ends"
     }
   ]
 }

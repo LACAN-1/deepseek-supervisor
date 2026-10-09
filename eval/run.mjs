@@ -1,6 +1,6 @@
 // Runs each task with the plugin and without it, and scores the runs.
 //
-//   node eval/run.mjs [--suite short|long|hard|late] [--reps 2] [--jobs 4] [--tasks a,b] [--arms on,off] [--out eval/results]
+//   node eval/run.mjs [--suite short|long|hard|late|weak] [--reps 2] [--jobs 4] [--tasks a,b] [--arms on,off] [--out eval/results]
 //
 // DSS_CMD is the command that starts Claude Code on your third-party endpoint
 // (default `claude`); DSS_ARGS is added after it, e.g. `--model sonnet`. Each run
@@ -17,6 +17,7 @@ import { TASKS as SHORT } from './tasks.mjs'
 import { TASKS as LONG } from './tasks-long.mjs'
 import { TASKS as HARD } from './tasks-hard.mjs'
 import { TASKS as LATE } from './tasks-late.mjs'
+import { TASKS as WEAK } from './tasks-weak.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const arg = (name, fallback) => {
@@ -33,7 +34,7 @@ const extra = process.env.DSS_ARGS ?? ''
 const TOOLS = 'Read,Write,Edit,Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(wc:*),Bash(head:*),Bash(tail:*),Bash(python3:*)'
 const LIMIT_MS = 20 * 60 * 1000
 
-const TASKS = { short: SHORT, long: LONG, hard: HARD, late: LATE }[arg('suite', 'short')]
+const TASKS = { short: SHORT, long: LONG, hard: HARD, late: LATE, weak: WEAK }[arg('suite', 'short')]
 const tasks = TASKS.filter(t => only === '' || only.split(',').includes(t.name))
 
 
@@ -41,10 +42,14 @@ const runs = tasks.flatMap(task => arms.flatMap(arm => Array.from({ length: reps
 mkdirSync(out, { recursive: true })
 
 // A short task has one check; a long one, one per trap, and passes when all are caught.
+// Markdown emphasis is not words: "test_settings: **FAILS**" says it fails. Underscores
+// stay, they are part of names (test_settings, legacy_round).
+const plain = text => text.replace(/\*+/g, '')
+
 const score = (task, ctx) => {
   const one = check => {
     try {
-      return ctx.answer !== '' && Boolean(check(ctx))
+      return ctx.answer !== '' && Boolean(check({ ...ctx, answer: plain(ctx.answer), files: Object.fromEntries(Object.entries(ctx.files ?? {}).map(([n, t]) => [n, n.endsWith('.md') ? plain(t) : t])) }))
     } catch {
       return false
     }

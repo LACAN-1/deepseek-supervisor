@@ -1,12 +1,26 @@
 {
   "name": "deepseek-supervisor",
-  "version": "0.7.0",
-  "description": "A check for Claude Code on a third-party model such as DeepSeek: when the model claims something is done, passing or right, a verifier runs the cheapest command that would show it false in a throwaway copy of the workspace, and hands the model the output",
+  "version": "0.8.0",
+  "description": "A supervisor for Claude Code on a weaker model such as DeepSeek: rules on what the model ran catch circles, bent tests and claims the record contradicts; a second, stronger model runs its claims and reviews its changes; what does not hold goes back to the model before the turn ends",
   "author": {
     "name": "LACAN-1"
   },
   "license": "MIT",
   "types": "./types/index.d.ts",
+  "userConfig": {
+    "verifier_model": {
+      "type": "string",
+      "title": "Verifier model",
+      "description": "The model that checks the work: runs the claims and reviews the change. Default `opus`, which DeepSeek's endpoint serves with its Pro model while `sonnet` and `haiku` get Flash. Any model id your endpoint takes, e.g. deepseek-v4-pro. If the endpoint refuses it, `sonnet` is used.",
+      "default": "opus"
+    },
+    "review_changes": {
+      "type": "boolean",
+      "title": "Review each turn's change",
+      "description": "At the end of a turn that changed code, the verifier also reads the change for a defect a command can show.",
+      "default": true
+    }
+  },
   "keywords": [
     "claude-code",
     "plugin",

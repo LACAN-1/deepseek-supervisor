@@ -19,11 +19,34 @@ export type Issue = {
   /** Which check raised it: the verifier (a command's output contradicted the model) or a rule in code. */
   from: 'verify' | 'rule'
   /**
-   * For a rule on the session's own record: which. `failed-check`, `stale-check`,
-   * `no-check`: a pass claimed against a failed run, against code edited since, or
-   * with no run at all; `untouched`: a file said to be changed that no tool call named.
+   * For a rule on the session's own record: which. On a claim of passing checks:
+   * `failed-check` (the last run failed), `stale-check` (code edited since it
+   * passed), `no-check` (none ran); `unreported-failure`, a turn that ends on a
+   * failing check it does not mention; `skipped-check`, a turn asked to run the
+   * checks that ran none and does not say so; `untouched`, a file said to be changed that
+   * no tool call named. On the work itself: `stuck`, the same command failing the
+   * same way three times; `edit-miss`, two edits against text the file lacks;
+   * `weakened-test`, a test made weaker; `ignored-constraint`, a file the person
+   * said not to touch, edited.
    */
-  rule?: 'failed-check' | 'stale-check' | 'no-check' | 'untouched'
+  rule?:
+    | 'skipped-check'
+    | 'failed-check'
+    | 'stale-check'
+    | 'no-check'
+    | 'unreported-failure'
+    | 'untouched'
+    | 'stuck'
+    | 'edit-miss'
+    | 'weakened-test'
+    | 'ignored-constraint'
+  /**
+   * For a defect the reviewer found in the change: the text the probe's output holds
+   * while the defect is there, and whether a command was seen to print it.
+   */
+  defect?: { expect: string; demonstrated: boolean }
+  /** How many tool calls the session had made when the item was raised: runs after it are the ones that settle it. */
+  pos?: number
   /** What is actually so, in one plain sentence; never how to fix it. */
   what: string
   /** The model's own words the item is about. */
