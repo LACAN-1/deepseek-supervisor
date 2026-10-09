@@ -143,8 +143,9 @@ const NESTED = /[\n\r`]|\$\(|<\(|(?<![&>])&(?!&)/
 // The readers' own flags that write a file or run another program.
 const WRITING_FLAGS: Record<string, RegExp> = {
   find: /^-(?:exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
-  sort: /^(?:-[^-]*o|--output|--compress-program)/,
-  rg: /^--pre(?:=|$)/,
+  // GNU long options take any unambiguous prefix: `--out=x` is `--output=x`.
+  sort: /^(?:-[^-]*o|--o|--co)/,
+  rg: /^--(?:pre|hostname-bin)(?:=|$)/,
   file: /^(?:-[^-]*C|--compile)/,
 }
 export const refusal = (command: string, mode: Mode, real: string): string | undefined => {
@@ -152,7 +153,9 @@ export const refusal = (command: string, mode: Mode, real: string): string | und
   if (mode === 'copy') return undefined
   if (NESTED.test(command)) return 'read-only mode: one command line only, with no command inside another (newline, &, $(…), `…`, <(…))'
   if (/>|\b(?:sed|perl)\s+-i|-delete\b|-exec\b|\brm\b|\bmv\b|\bcp\b|\btee\b/.test(command)) return 'read-only mode: no copy of the workspace could be made, so nothing that writes may run'
-  for (const [word = '', ...args] of command.split(/\||&&|\|\||;/).map(p => p.trim().split(/\s+/))) {
+  for (const [word = '', ...quoted] of command.split(/\||&&|\|\||;/).map(p => p.trim().split(/\s+/))) {
+    // The shell drops quotes and backslashes before the reader sees a flag: `"-execdir"` is -execdir.
+    const args = quoted.map(a => a.replace(/["'\\]/g, ''))
     if (word === '') continue
     if (!READERS.has(word)) return `read-only mode: only ${[...READERS].join(', ')} may run, not ${word}`
     const flag = args.find(a => WRITING_FLAGS[word]?.test(a) === true)

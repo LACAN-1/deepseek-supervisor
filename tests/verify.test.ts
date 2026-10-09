@@ -120,7 +120,7 @@ test('commands stay in the copy; with no copy, only what cannot write runs', asy
   for (const c of ['cat a\npython3 x.py', 'cat a & python3 x.py', 'echo $(python3 x.py)', 'echo `touch x`', 'cat <(python3 x.py)'])
     expect(refusal(c, 'read-only', '/p')).toContain('read-only')
   // Nor is a reader's flag that writes or runs something.
-  for (const c of ['find . -execdir touch {} ;', 'find . -fprint out', 'sort -o out a', 'sort -uo out a', 'sort --compress-program=python3 a', 'rg --pre ./x.sh y', 'uniq a out', 'file -C -m a'])
+  for (const c of ['find . -execdir touch {} ;', 'find . -fprint out', 'sort -o out a', 'sort -uo out a', 'sort --compress-program=python3 a', 'rg --pre ./x.sh y', 'uniq a out', 'file -C -m a', 'find . "-execdir" touch {} +', "find . -fpr'int' out", 'sort --out=x a', 'sort "-o" x a', 'sort --compress=python3 a', 'rg --hostname-bin ./x.sh y'])
     expect(refusal(c, 'read-only', '/p')).toContain('read-only')
   for (const c of ['sort a | uniq -c', 'uniq -f 2 a', 'find . -name "*.py" | wc -l', 'rg --pre-glob "*.gz" x', 'grep -c x a && echo ok'])
     expect(refusal(c, 'read-only', '/p')).toBeUndefined()
