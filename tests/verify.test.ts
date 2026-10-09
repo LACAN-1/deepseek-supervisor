@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { claimsOf, factsOf, isSameItem, noteText, parseTurn, refusal } from '../hooks/prompt'
+import { claimsOf, factsOf, factsText, isSameItem, noteText, parseTurn, refusal } from '../hooks/prompt'
 
 const COPY = '/tmp/t/dss-verify.AbC123'
 const usage = { input_tokens: 300, output_tokens: 80, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0 }
@@ -175,6 +175,20 @@ test('facts come from the tool calls, not from what the model said about them', 
     ] },
   ])
   expect(read.unopened).toEqual([])
+  // A render it looked at is in the record the verifier reads (2026-10-09: told only "no
+  // test runs" and "no unopened images", it called a headless render it saw made up).
+  const looked = factsOf([
+    { role: 'assistant', text: '', toolUses: [
+      { tool: 'Bash', input: { command: 'cd /tmp && chrome --headless --screenshot=/tmp/pelican2_shot.png "file:///p/pelican2.html"' }, text: '132855 bytes written to file /tmp/pelican2_shot.png' },
+      { tool: 'Read', input: { file_path: '/tmp/pelican2_shot.png' } },
+      // A render whose `ls` lists an image read before: that one was not made again.
+      { tool: 'Bash', input: { command: 'chrome --headless --screenshot=out.png x.html; ls' }, text: 'out.png\npelican2_shot.png' },
+      { tool: 'Read', input: { file_path: '/p/out.png' } },
+    ] },
+  ])
+  expect(looked.opened).toEqual(['/tmp/pelican2_shot.png', 'out.png'])
+  expect(looked.unopened).toEqual([])
+  expect(factsText(looked)).toContain('then opened with Read (the assistant looked at these; you cannot):\n- /tmp/pelican2_shot.png')
   expect(isSameItem({ quote: '- All tests pass and total() is correct.' }, { quote: 'All tests pass and total() is correct.' })).toBe(true)
 })
 

@@ -57,7 +57,10 @@ export const claimsOf = (text: string): string[] =>
 // they are looked for there too.
 type Use = { tool: string; input: unknown; text?: string; result?: unknown; isError?: true }
 type Row = { role: string; text: string; toolUses?: readonly Use[] }
-const IMAGE = /[\w.\-/~]*[\w-]\.(?:png|jpe?g|gif|webp)\b/gi
+const IMAGE = /[\w.\-/~${}]*[\w-]\.(?:png|jpe?g|gif|webp)\b/gi
+// In what a command printed, only a line that says it wrote the image: an `ls` after a
+// render lists the old ones too (2026-10-09).
+const WROTE = /\b(?:wr(?:ote|itten|iting)|saved?|saving|creat(?:ed|ing)|generat(?:ed|ing)|export(?:ed|ing)|render(?:ed|ing)|output)\b|保存|生成|写入|导出/i
 const ERROR = /Traceback \(most recent call last\)|\b\w*Error\b:|command not found|No such file or directory|\bexit code [1-9]/
 export const base = (p: string) => p.slice(p.lastIndexOf('/') + 1)
 const firstLine = (s: string, re: RegExp) => s.split('\n').find(l => re.test(l)) ?? s.split('\n')[0] ?? ''
@@ -65,6 +68,8 @@ const firstLine = (s: string, re: RegExp) => s.split('\n').find(l => re.test(l))
 export type Facts = {
   errors: string[]
   unopened: string[]
+  /** Images made and then opened with Read: what the assistant looked at. */
+  opened?: string[]
   written: string[]
   /** The test and check runs, failed or passed, each with how it ended (newest last). */
   runs?: string[]
@@ -93,24 +98,29 @@ export const factsOf = (rows: readonly Row[]): Facts => {
     // A search or listing names images it found, not ones it made: a doc that
     // mentions shot1.png made nothing (2026-10-09).
     if (u.tool === 'Grep' || u.tool === 'Glob' || (u.tool === 'Bash' && typeof input.command === 'string' && onlyReads(input.command))) return
-    for (const m of `${leaves(input).join(' ')} ${out}`.matchAll(IMAGE)) {
+    const said = out.split('\n').filter(l => WROTE.test(l)).join('\n')
+    for (const m of `${leaves(input).join(' ')} ${said}`.matchAll(IMAGE)) {
       const was = seen.get(base(m[0]))
       seen.set(base(m[0]), { path: m[0], at, read: was?.read ?? -1 })
     }
   })
   const unopened = [...seen.values()].filter(x => x.read < x.at).sort((a, b) => a.at - b.at).map(x => x.path)
-  return { errors: errors.slice(-8), unopened: unopened.slice(-10), written: [...written].slice(-20) }
+  const opened = [...seen.values()].filter(x => x.read >= x.at).sort((a, b) => a.at - b.at).map(x => x.path)
+  return { errors: errors.slice(-8), unopened: unopened.slice(-10), opened: opened.slice(-10), written: [...written].slice(-20) }
 }
 
 export const factsText = (f: Facts) =>
   [
     // A run that passed after the failures is the newest word on them: without it, the
     // failures alone read as "nothing ever passed" (live, round 6).
-    ...(f.runs === undefined ? [] : ['Test and check runs (newest last; a later one supersedes an earlier):', ...(f.runs.length === 0 ? ['(none)'] : f.runs.map(x => `- ${x}`))]),
+    // Test runners only: a render or a script of the assistant's own is no run here, and
+    // "(none)" read as "nothing was checked" (2026-10-09: a headless render it looked at).
+    ...(f.runs === undefined ? [] : ['Test and check runs: test runners, builds, type checks, linters only (newest last; a later one supersedes an earlier):', ...(f.runs.length === 0 ? ['(none)'] : f.runs.map(x => `- ${x}`))]),
     'Commands that failed (newest last):',
     ...(f.errors.length === 0 ? ['(none)'] : f.errors.map(x => `- ${x}`)),
     'Images a tool wrote or named, not opened with Read since (newest last):',
     ...(f.unopened.length === 0 ? ['(none)'] : f.unopened.map(x => `- ${x}`)),
+    ...(f.opened === undefined ? [] : ['Images a tool wrote or named, then opened with Read (the assistant looked at these; you cannot):', ...(f.opened.length === 0 ? ['(none)'] : f.opened.map(x => `- ${x}`))]),
     'Files the assistant wrote or edited:',
     ...(f.written.length === 0 ? ['(none)'] : f.written.map(x => `- ${x}`)),
   ].join('\n')
@@ -279,6 +289,7 @@ export const verifyPrompt = (input: VerifyInput, mode: Mode, toRecheck: readonly
     "- For each, run the cheapest command that would show it false. Never trust the assistant's account of an output: run it again.",
     '- Do not let a pipe hide a failure: `cmd 2>&1 | tail -5` loses the exit code; append `; echo "exit=$?"` to the command instead.',
     '- You cannot see images. Check one with code (its size, pixel values via python3) or call the claim unclear.',
+    "- Only the workspace is here. A file outside it (/tmp, the home folder) is missing here whether or not it exists: its absence shows nothing. That an image was made and looked at is in the record above, not in a listing.",
     '- false only when an output you saw contradicts the claim. Anything less is unclear.',
     ...((input.changes ?? '') === ''
       ? []

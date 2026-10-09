@@ -382,7 +382,7 @@ test('live: a test named as passing is the record\'s to judge, and the verifier 
   expect(judge([ask, say('', edit('/p/shop.py')), say('', passing('python3 -m unittest test_shop')), say(claim)], claim)).toEqual([])
   expect(judge([ask, say('', edit('/p/shop.py')), say(claim)], claim)[0]?.kind).toBe('no-check')
   const text = factsText({ errors: ['Bash `python3 -m unittest`: AssertionError: 2 != 3'], unopened: [], written: [], runs: ['`python3 -m unittest`: failed (AssertionError: 2 != 3)', '`python3 -m unittest`: passed'] })
-  expect(text).toContain('Test and check runs (newest last; a later one supersedes an earlier):\n- `python3 -m unittest`: failed (AssertionError: 2 != 3)\n- `python3 -m unittest`: passed')
+  expect(text).toContain('Test and check runs: test runners, builds, type checks, linters only (newest last; a later one supersedes an earlier):\n- `python3 -m unittest`: failed (AssertionError: 2 != 3)\n- `python3 -m unittest`: passed')
 })
 
 // Round 6 of the live eval: the work folder was /tmp/dss-eval-bent-test-…, so `find` in it
