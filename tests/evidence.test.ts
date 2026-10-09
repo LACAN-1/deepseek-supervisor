@@ -65,6 +65,9 @@ test('commands that would send credentials to the verifier\'s endpoint are refus
   expect(refusal('grep -n total a.py 2>/dev/null', 'read-only', '/p')).toBeUndefined()
   expect(refusal('grep -n total a.py 2>&1 | head -5', 'read-only', '/p')).toBeUndefined()
   expect(refusal('cat a.py > b.py', 'read-only', '/p')).toContain('read-only')
+  // Only /dev/null itself: a file whose name starts with it is a file.
+  expect(refusal('cat a.py >/dev/nullx', 'read-only', '/p')).toContain('read-only')
+  expect(refusal('cat a.py 2>&1x', 'read-only', '/p')).toContain('read-only')
   expect(refusal('python3 -m unittest 2>&1 | tail -3', 'copy', '/p')).toBeUndefined()
 })
 
