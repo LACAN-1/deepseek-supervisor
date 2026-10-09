@@ -47,7 +47,8 @@ const SPECIFIC = /\b\w*(?:Error|Exception)\b[:\s]|\b(?:Expected|Received|expecte
 
 // A claim that the tests, the build or a check came out right: what and how, in one
 // phrase. "How to verify everything works", beside "test cases", is not that.
-const CHECKED = String.raw`(?:tests?|specs?|test suite|suite|builds?|checks?|lint(?:s|er)?|type ?checks?|tsc|ci)`
+// A test by its name counts: "✓ `test_discount` PASSED" is the record's to judge too (live, round 6).
+const CHECKED = String.raw`(?:tests?|specs?|test suite|suite|builds?|checks?|lint(?:s|er)?|type ?checks?|tsc|ci|test_\w+|\w+_test)`
 const OUTCOME = String.raw`(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|successful(?:ly)?|clean(?:ly)?)`
 const CHECK_PASS = new RegExp(
   String.raw`\b${CHECKED}\b[^.\n]{0,40}?\b${OUTCOME}\b|\b${OUTCOME}\b[^.\n]{0,12}?\b${CHECKED}\b|\bcompiles?\b|(?:测试|单测|用例|构建|编译|类型检查)[^。\n]{0,10}(?:通过|全过|跑通|成功|全绿|绿了|没问题|无报错)|(?:全部|都)(?:通过|跑通)`,

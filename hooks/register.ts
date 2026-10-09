@@ -406,8 +406,8 @@ type CheckOptions = {
 const check = async ($: EngineInterface, list: Rows, o: CheckOptions): Promise<Issue[]> => {
   const at = await $.clock.now()
   const before = await read($, track)
-  const facts = factsOf(list)
   const record = evidenceOf(list)
+  const facts = { ...factsOf(list), runs: record.runs.slice(-6).map(r => `\`${clip(r.command, 100)}\`: ${r.ok ? 'passed' : `failed (${r.line || 'it reported a failure'})`}`) }
   const open = before.issues.filter(i => i.status === 'open')
   // The record first: no model, so no budget and no made-up evidence, and it works
   // where no command may run. Only what the record still contradicts now is raised:

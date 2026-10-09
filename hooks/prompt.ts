@@ -62,7 +62,13 @@ const ERROR = /Traceback \(most recent call last\)|\b\w*Error\b:|command not fou
 export const base = (p: string) => p.slice(p.lastIndexOf('/') + 1)
 const firstLine = (s: string, re: RegExp) => s.split('\n').find(l => re.test(l)) ?? s.split('\n')[0] ?? ''
 
-export type Facts = { errors: string[]; unopened: string[]; written: string[] }
+export type Facts = {
+  errors: string[]
+  unopened: string[]
+  written: string[]
+  /** The test and check runs, failed or passed, each with how it ended (newest last). */
+  runs?: string[]
+}
 
 export const factsOf = (rows: readonly Row[]): Facts => {
   const uses = rows.filter(r => r.role === 'assistant').flatMap(r => r.toolUses ?? [])
@@ -92,6 +98,9 @@ export const factsOf = (rows: readonly Row[]): Facts => {
 
 export const factsText = (f: Facts) =>
   [
+    // A run that passed after the failures is the newest word on them: without it, the
+    // failures alone read as "nothing ever passed" (live, round 6).
+    ...(f.runs === undefined ? [] : ['Test and check runs (newest last; a later one supersedes an earlier):', ...(f.runs.length === 0 ? ['(none)'] : f.runs.map(x => `- ${x}`))]),
     'Commands that failed (newest last):',
     ...(f.errors.length === 0 ? ['(none)'] : f.errors.map(x => `- ${x}`)),
     'Images a tool wrote or named, not opened with Read since (newest last):',

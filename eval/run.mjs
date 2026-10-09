@@ -104,7 +104,8 @@ const pluginStats = log => {
       }
     })
   const checks = json(/deepseek-supervisor: CHECK (\{.*\})/g)
-  const passes = [...log.matchAll(/\$\.model\.fork \(deepseek-supervisor\)/g)].length + checks.filter(c => c.claims > 0 || (c.rules?.length ?? 0) > 0).length
+  // 0.8.0 also counts a check that read the turn's change.
+  const passes = [...log.matchAll(/\$\.model\.fork \(deepseek-supervisor\)/g)].length + checks.filter(c => c.claims > 0 || (c.changes ?? 0) > 0 || (c.rules?.length ?? 0) > 0).length
   const items = json(/deepseek-supervisor: WATCH (\{.*\})/g).reduce((n, w) => n + (w.fresh?.length ?? 0), 0) + checks.reduce((n, c) => n + (c.found?.length ?? 0), 0)
   // 0.7.0: the items its rules on the record raised, with no model call.
   const rules = checks.reduce((n, c) => n + (c.rules?.length ?? 0), 0)

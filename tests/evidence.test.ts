@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { changesOf, contradictions, evidenceOf, isCheckCommand, recordFindings, settledBy, skipped, supports, unreported } from '../hooks/evidence'
-import { parseTurn, probeRefusal, redact, refusal, sanitize } from '../hooks/prompt'
+import { factsText, parseTurn, probeRefusal, redact, refusal, sanitize } from '../hooks/prompt'
 
 type Use = { tool_use_id?: string; tool: string; input: Record<string, unknown>; text?: string; isError?: true }
 const say = (text: string, ...toolUses: Use[]) => ({ role: 'assistant', text, toolUses })
@@ -373,4 +373,14 @@ test('live: tests run from a heredoc or -c through a test runner are a run; func
   // tests, and the word "Test" in the model's own code does not make it the project's runner.
   const handCheck = "python3 << 'EOF'\nfrom shop import parse_price\n# Test parse_price\nprint('Pass:', parse_price('3.50') == 3.5)\nEOF"
   expect(judge([ask, say('', edit('/p/shop.py')), say('', bash(handCheck, 'Pass: True')), say('All tests pass.')], 'All tests pass.')[0]?.kind).toBe('no-check')
+})
+
+// Round 6 of the live eval: "✓ `test_discount` PASSED" went to the verifier (read-only), which
+// saw only the failures and said no run had passed, though the last one had.
+test('live: a test named as passing is the record\'s to judge, and the verifier is shown the runs that passed', async () => {
+  const claim = '✓ `test_discount` PASSED'
+  expect(judge([ask, say('', edit('/p/shop.py')), say('', passing('python3 -m unittest test_shop')), say(claim)], claim)).toEqual([])
+  expect(judge([ask, say('', edit('/p/shop.py')), say(claim)], claim)[0]?.kind).toBe('no-check')
+  const text = factsText({ errors: ['Bash `python3 -m unittest`: AssertionError: 2 != 3'], unopened: [], written: [], runs: ['`python3 -m unittest`: failed (AssertionError: 2 != 3)', '`python3 -m unittest`: passed'] })
+  expect(text).toContain('Test and check runs (newest last; a later one supersedes an earlier):\n- `python3 -m unittest`: failed (AssertionError: 2 != 3)\n- `python3 -m unittest`: passed')
 })
