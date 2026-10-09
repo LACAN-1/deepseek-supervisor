@@ -50,12 +50,12 @@ const HISTORY = 50
 
 // The band's two values, drawn by hooks/band.tsx. The scan wants every file that
 // writes one to name it in a const of its own; types/index.d.ts holds both to one shape.
-const cards = atom({ plugin: 'deepseek-supervisor', key: 'cards' } as const, null)
-const isHidden = atom({ plugin: 'deepseek-supervisor', key: 'isHidden' } as const, false)
+const cards = atom({ plugin: 'receipts', key: 'cards' } as const, null)
+const isHidden = atom({ plugin: 'receipts', key: 'isHidden' } as const, false)
 // The numbered items. In $.state, not a module variable, so a hot reload neither
 // forgets what the model was told nor reuses an id.
 const EMPTY: Track = { nextId: 1, issues: [], seen: [], runs: 0 }
-const track = atom({ plugin: 'deepseek-supervisor', key: 'track' } as const, EMPTY)
+const track = atom({ plugin: 'receipts', key: 'track' } as const, EMPTY)
 
 type Config = { verifierModel: string; reviewChanges: boolean }
 const configOf = (options: PluginOptions | undefined): Config => ({
@@ -65,16 +65,19 @@ const configOf = (options: PluginOptions | undefined): Config => ({
   reviewChanges: options?.review_changes !== false,
 })
 
-const say = ($: EngineInterface, line: string) => $.ui.log(`deepseek-supervisor: ${line}`, { to: 'debug' })
+const say = ($: EngineInterface, line: string) => $.ui.log(`receipts: ${line}`, { to: 'debug' })
 
-// `on` and `off` are what the person chose, with the command or DEEPSEEK_SUPERVISOR;
+// `on` and `off` are what the person chose, with the command or RECEIPTS (or, from before
+// the plugin was renamed, DEEPSEEK_SUPERVISOR);
 // with neither, it runs where the built-in one is hidden: ANTHROPIC_BASE_URL set to
 // a host that is not Anthropic's.
 type Setting = 'auto' | 'on' | 'off'
 const settingOf = async ($: EngineInterface): Promise<Setting> => {
   const v = await $.store.get('mode').catch(() => undefined)
   if (v === 'on' || v === 'off') return v
-  const env = (await $.env.get('DEEPSEEK_SUPERVISOR').catch(() => undefined))?.trim().toLowerCase()
+  const env = (
+    (await $.env.get('RECEIPTS').catch(() => undefined)) ?? (await $.env.get('DEEPSEEK_SUPERVISOR').catch(() => undefined))
+  )?.trim().toLowerCase()
   return env === 'on' || env === 'off' ? env : 'auto'
 }
 
@@ -122,11 +125,11 @@ const show = async ($: EngineInterface) => {
   if (!(await isOn($)))
     return $.ui.status(
       (await settingOf($)) === 'off'
-        ? 'deepseek-supervisor is off (/deepseek-supervisor on)'
-        : 'deepseek-supervisor idle: Anthropic endpoint, where the built-in "You should know" runs (/deepseek-supervisor on to force)',
+        ? 'receipts is off (/receipts on)'
+        : 'receipts idle: Anthropic endpoint, where the built-in "You should know" runs (/receipts on to force)',
     )
   const open = (await read($, track)).issues.filter(i => i.status === 'open').length
-  $.ui.status(`deepseek-supervisor checking · ${told} noted` + (open === 0 ? '' : ` (${open} open)`) + (last === '' ? '' : ` · last: ${last}`))
+  $.ui.status(`receipts checking · ${told} noted` + (open === 0 ? '' : ` (${open} open)`) + (last === '' ? '' : ` · last: ${last}`))
 }
 
 const remember = async ($: EngineInterface, entry: Record<string, unknown>) => {
@@ -334,8 +337,9 @@ const unopenedClaimed = (facts: Facts, claims: readonly string[]) =>
     .map(path => [path, claims.find(c => c.includes(base(path)) || (IMAGE_WORDS.test(c) && facts.unopened.length <= 3))] as const)
     .filter((x): x is readonly [string, string] => x[1] !== undefined)
 
-// The model's own word that it told the person: `[ysk#3 told]`, `[ysk#3 refuted: …]`.
-const TAG = /\[ysk#(\d+)\s+(told|refuted)\b[^\]]*\]/g
+// The model's own word that it told the person: `[receipt#3 told]`, `[receipt#3 refuted: …]`
+// (`ysk#3`, from before the rename, too).
+const TAG = /\[(?:receipt|ysk)#(\d+)\s+(told|refuted)\b[^\]]*\]/g
 
 type Rows = { role: string; text: string; toolUses?: readonly { tool: string; input: unknown; text?: string; result?: unknown; isError?: true }[] }[]
 
@@ -433,8 +437,8 @@ const check = async ($: EngineInterface, list: Rows, o: CheckOptions): Promise<I
   const images = unopenedClaimed(facts, o.claims)
   let v: VerifyResult | undefined
   if (handed.length > 0 || changes !== '' || rechecks) {
-    $.ui.status('deepseek-supervisor checking what the model said…')
-    const fallback = list.find(r => r.role === 'user' && r.text.trim() !== '' && !r.text.includes('[deepseek-supervisor]'))?.text ?? ''
+    $.ui.status('receipts checking what the model said…')
+    const fallback = list.find(r => r.role === 'user' && r.text.trim() !== '' && !/\[(?:receipts|deepseek-supervisor)\]/.test(r.text))?.text ?? ''
     v = await verify($, { claims: handed, asked: asked !== '' ? asked : fallback, facts, open, cwd: await $.session.cwd().catch(() => ''), changes, budgetMs: o.kind === 'answer' && !isInteractive ? WAITED_MS : FREE_MS })
   }
   const done = await $.clock.now()
@@ -587,7 +591,7 @@ const tick = async ($: EngineInterface) => {
       .catch((err: unknown) => ({ deny: String(err) }))
     if (note.deny !== undefined) {
       say($, `note not delivered (${note.deny})`)
-      $.ui.toast('deepseek-supervisor: a note did not reach the model; see the band above the prompt')
+      $.ui.toast('receipts: a note did not reach the model; see the band above the prompt')
     }
   } catch (err) {
     say($, `check failed: ${err}`)
@@ -630,7 +634,7 @@ export const register: Register = (on, options) => {
     // A reload starts here too: what was raised before it does not hold a turn after it.
     turnFrom = await $.clock.now()
     await $.command
-      .register({ name: 'deepseek-supervisor', description: 'Checks the model at work: rules on what it ran, and a second model running its claims. on, off, auto, log, or issues', argumentHint: '[on|off|auto|log|issues]' })
+      .register({ name: 'receipts', description: 'Checks the model at work: rules on what it ran, and a second model running its claims. on, off, auto, log, or issues', argumentHint: '[on|off|auto|log|issues]' })
       .catch(err => say($, `command not registered: ${err}`))
     await show($)
     return result
@@ -662,7 +666,7 @@ export const register: Register = (on, options) => {
     if (e.agent_id !== undefined || !(await isOn($))) return result
     const list = await messages($)
     const said = list.filter(r => r.role === 'assistant').map(r => r.text)
-    // A `[ysk#3 told]` written in passing settles #3 as one in the final answer does.
+    // A `[receipt#3 told]` written in passing settles #3 as one in the final answer does.
     await settleTags($, said.join('\n'))
     const claims = [...new Set(said.flatMap(claimsOf))]
     const found = await check($, list, { kind: 'batch', claims, verifier: false })
@@ -726,7 +730,7 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  on('command.run', { command: 'deepseek-supervisor' }, async ($, e) => {
+  on('command.run', { command: 'receipts' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     if (arg === 'log') {
       const list = await $.store.get('history').catch(() => [])
@@ -751,9 +755,9 @@ export const register: Register = (on, options) => {
       else await $.store.set('mode', arg)
       if (!(await isOn($))) await update($, cards, () => null)
       await show($)
-      return { text: `deepseek-supervisor is ${arg}${arg === 'auto' ? ` (${(await isOn($)) ? 'checking' : "idle on Anthropic's endpoint"})` : ''}.` }
+      return { text: `receipts is ${arg}${arg === 'auto' ? ` (${(await isOn($)) ? 'checking' : "idle on Anthropic's endpoint"})` : ''}.` }
     }
     const setting = await settingOf($)
-    return { text: `deepseek-supervisor is ${setting}${setting === 'auto' ? ` (${(await isOn($)) ? 'checking' : "idle on Anthropic's endpoint"})` : ''}. Usage: /deepseek-supervisor [on|off|auto|log|issues]` }
+    return { text: `receipts is ${setting}${setting === 'auto' ? ` (${(await isOn($)) ? 'checking' : "idle on Anthropic's endpoint"})` : ''}. Usage: /receipts [on|off|auto|log|issues]` }
   })
 }

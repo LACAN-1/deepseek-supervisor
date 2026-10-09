@@ -170,7 +170,7 @@ const signatureOf = (out: string) =>
 
 // The person's rows, not the tool results, the notes this plugin wrote, or the
 // engine's own reminders.
-const isPerson = (r: Row) => r.role === 'user' && r.text.trim() !== '' && !r.text.includes('[deepseek-supervisor]') && !/^\s*<(?:system-reminder|command-|local-command)/.test(r.text)
+const isPerson = (r: Row) => r.role === 'user' && r.text.trim() !== '' && !/\[(?:receipts|deepseek-supervisor)\]/.test(r.text) && !/^\s*<(?:system-reminder|command-|local-command)/.test(r.text)
 
 // The session's main loop as a sequence of tool calls, each with its position; a
 // row's text is said before the row's own tool calls run.

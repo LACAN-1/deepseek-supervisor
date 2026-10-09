@@ -116,7 +116,7 @@ const steps = async ($: Parameters<TestBody>[0], n: number, agentId?: string) =>
 const end = ($: Parameters<TestBody>[0], answer: string, reason: 'answer' | 'aborted' = 'answer') =>
   $.turn.complete({ answer, durationMs: 1, isAborted: reason === 'aborted', turnId: 't1', reason } as never)
 const prompt = ($: Parameters<TestBody>[0], text: string) => $.prompt.submit({ text, origin: { kind: 'composer' } } as never)
-const issues = ($: Parameters<TestBody>[0]) => $.command.run({ command: 'deepseek-supervisor', args: 'issues' } as never).then(r => (r as { text: string }).text)
+const issues = ($: Parameters<TestBody>[0]) => $.command.run({ command: 'receipts', args: 'issues' } as never).then(r => (r as { text: string }).text)
 
 test('the claims in a text are the sentences that say something is so', async () => {
   expect(claimsOf('Ran them. All tests pass. Next I will tidy up.')).toEqual(['All tests pass.'])
@@ -197,7 +197,7 @@ test('a new claim sends the verifier into a copy; what the output contradicts re
   expect(w.notes.length).toBe(1)
   expect(w.notes[0]).toContain('you wrote: All tests pass.')
   expect(await issues($)).toContain('#1 [open] One test fails')
-  const drawn = await $.ui.mount({ plugin: 'deepseek-supervisor', surface: 'terminal', component: 'AbovePrompt', props: band } as never)
+  const drawn = await $.ui.mount({ plugin: 'receipts', surface: 'terminal', component: 'AbovePrompt', props: band } as never)
   expect(await drawn.find({ text: /One test fails/ })).toBeDefined()
 })
 
@@ -210,7 +210,7 @@ test('a claim is checked once; an item closes when its recheck passes, whatever 
   await w.clock.advance(10)
   expect(w.asked.length).toBe(1)
 
-  w.state.rows = [...CLAIMED, { role: 'assistant', text: '[ysk#1 fixed]', toolUses: [] }]
+  w.state.rows = [...CLAIMED, { role: 'assistant', text: '[receipt#1 fixed]', toolUses: [] }]
   await steps($, 3)
   await w.clock.advance(10)
   expect(w.asked.length).toBe(1)
@@ -272,7 +272,7 @@ test('the model telling the person settles an item', async ($, on) => {
   await start($)
   await steps($, 3)
   await w.clock.advance(10)
-  await end($, 'One test still fails because the fixture is missing; I could not fix it. [ysk#1 told]')
+  await end($, 'One test still fails because the fixture is missing; I could not fix it. [receipt#1 told]')
   await w.clock.advance(10)
   expect(await issues($)).toContain('#1 [told]')
 })
@@ -341,7 +341,7 @@ test('on Anthropic\'s own endpoint it stays idle unless switched on', async ($, 
   await end($, 'All tests pass.')
   await w.clock.advance(10)
   expect(w.asked.length).toBe(0)
-  await $.command.run({ command: 'deepseek-supervisor', args: 'on' } as never)
+  await $.command.run({ command: 'receipts', args: 'on' } as never)
   await steps($, 3)
   await w.clock.advance(10)
   expect(w.asked.length).toBe(1)
@@ -356,7 +356,7 @@ test('a note the session refuses is still in the band, and the person is told', 
   await w.clock.advance(10)
   expect(w.notes.length).toBe(0)
   expect(w.toasts.at(-1)).toContain('did not reach the model')
-  const drawn = await $.ui.mount({ plugin: 'deepseek-supervisor', surface: 'terminal', component: 'AbovePrompt', props: band } as never)
+  const drawn = await $.ui.mount({ plugin: 'receipts', surface: 'terminal', component: 'AbovePrompt', props: band } as never)
   expect(await drawn.find({ text: /One test fails/ })).toBeDefined()
 })
 
@@ -623,15 +623,15 @@ test('the verifier\'s model is the person\'s to choose', { options: { verifier_m
   expect(w.models[0]).toBe('deepseek-v4-pro')
 })
 
-test('DEEPSEEK_SUPERVISOR=on turns it on where it would idle; the command still has the last word', async ($, on) => {
+test('RECEIPTS=on turns it on where it would idle; the command still has the last word', async ($, on) => {
   const w = world(on)
   w.state.baseUrl = 'https://api.anthropic.com'
-  w.state.env.DEEPSEEK_SUPERVISOR = 'on'
+  w.state.env.RECEIPTS = 'on'
   await start($)
   await steps($, 3)
   await w.clock.advance(10)
   expect(w.asked.length).toBe(1)
-  await $.command.run({ command: 'deepseek-supervisor', args: 'off' } as never)
+  await $.command.run({ command: 'receipts', args: 'off' } as never)
   await steps($, 3)
   await w.clock.advance(10)
   expect(w.asked.length).toBe(1)
@@ -698,7 +698,7 @@ test('a hold with nothing new to say does not come again', async ($, on) => {
   await prompt($, 'fix total()')
   expect((await stop($, 'Fixed. All tests pass.')).block).toContain('#1')
   // It now owns up: #1 stays open, but it was already put to the model.
-  expect((await stop($, 'test_total still fails: 47.25 != 59.75. [ysk#1 told]', true)).block).toBeUndefined()
+  expect((await stop($, 'test_total still fails: 47.25 != 59.75. [receipt#1 told]', true)).block).toBeUndefined()
 })
 
 test('with no copy, a suspected defect whose probe does more than run the code is not passed on', async ($, on) => {
@@ -720,7 +720,7 @@ test('live: the same claim said again after its item closed is raised again; the
   await start($)
   expect((await batch($)).additionalContext?.[0]).toContain('#1 The last check run failed')
   // The model tells the person; #1 closes. The old saying is not raised again.
-  w.state.rows = [...w.state.rows, claimRow('n2', 'test_total still fails. [ysk#1 told]')]
+  w.state.rows = [...w.state.rows, claimRow('n2', 'test_total still fails. [receipt#1 told]')]
   expect((await batch($)).additionalContext ?? []).toEqual([])
   expect(await issues($)).toContain('#1 [told]')
   // Later it fails again and says the same words again: that is a new claim.
@@ -763,4 +763,18 @@ test('a change the reviewer read to the end is not read again; one edited since 
   await stop($, 'An empty cart now averages to 0.')
   expect(w.asked.length).toBe(2)
   expect(w.asked[1]).toContain('if prices else 0')
+})
+
+// The plugin was deepseek-supervisor before 0.8.0: what a person set up then still works.
+test('the old switch, DEEPSEEK_SUPERVISOR=on, and the old tag, [ysk#1 told], still work', async ($, on) => {
+  const w = world(on, [{ role: 'user', text: 'fix total()', toolUses: [] }, failingRun('a')])
+  w.state.baseUrl = 'https://api.anthropic.com'
+  w.state.env.DEEPSEEK_SUPERVISOR = 'on'
+  w.state.noSandbox = true
+  await start($)
+  await prompt($, 'fix total()')
+  expect((await stop($, 'Fixed. All tests pass.')).block).toContain('#1 The last check run failed')
+  w.state.rows = [...w.state.rows, { role: 'assistant', text: 'test_total still fails. [ysk#1 told]', toolUses: [] }]
+  await batch($)
+  expect(await issues($)).toContain('#1 [told]')
 })

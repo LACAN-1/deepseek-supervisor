@@ -41,11 +41,11 @@ export const CLAIM =
 
 /**
  * The sentences and lines of a text that claim something, each clipped, in order.
- * The model's own `[ysk#3 fixed]` tags are left out: an item closes on its recheck.
+ * The model's own `[receipt#3 fixed]` tags are left out: an item closes on its recheck.
  */
 export const claimsOf = (text: string): string[] =>
   text
-    .replace(/\[ysk#\d+[^\]]*\]/g, '')
+    .replace(/\[(?:receipt|ysk)#\d+[^\]]*\]/g, '')
     .split(/\n|(?<=[。！？!?])\s*|(?<=\.)\s+(?=[A-Z])/)
     .map(squash)
     .filter(s => s.length >= 6 && CLAIM.test(s))
@@ -374,7 +374,7 @@ export const isSameItem = (a: { quote: string }, b: { quote: string }) => {
 // One item as the model reads it: its own words, the command, what it printed,
 // and how the item closes.
 const CLOSES_BY_RECORD = '   closes: when a check command passes after your last edit to code (read from the session; saying so does not close it)'
-const CLOSES_BY_TELLING = (id: number) => `   closes: when you tell the person, writing \`[ysk#${id} told]\` in that reply`
+const CLOSES_BY_TELLING = (id: number) => `   closes: when you tell the person, writing \`[receipt#${id} told]\` in that reply`
 
 export const itemText = (raw: Issue) => {
   const i = { ...raw, what: sanitize(raw.what), quote: sanitize(raw.quote), probe: sanitize(raw.probe), saw: raw.saw === undefined ? undefined : sanitize(raw.saw) }
@@ -386,7 +386,7 @@ export const itemText = (raw: Issue) => {
           `#${i.id} A reviewer suspects a defect in your change: ${i.what}`,
           `   changed line: ${i.quote}`,
           `   run: ${i.probe}`,
-          `   if its output holds \`${expect}\`, the defect is real: fix it. If it does not, the reviewer was wrong: say so in one line, \`[ysk#${i.id} refuted: what it printed]\`.`,
+          `   if its output holds \`${expect}\`, the defect is real: fix it. If it does not, the reviewer was wrong: say so in one line, \`[receipt#${i.id} refuted: what it printed]\`.`,
           `   closes: when \`${i.probe}\` runs without printing \`${expect}\``,
         ].join('\n')
   }
@@ -423,14 +423,14 @@ export const noteText = (issues: readonly Issue[], o: { final?: boolean } = {}) 
   [
     ...(o.final === true
       ? [
-          `[deepseek-supervisor] Before you finish: a separate check (not the person) found ${issues.length} item(s). Handle them, then give the person your whole answer again: everything your last answer said that still holds, corrected, with these folded in. They may read only your last message.`,
+          `[receipts] Before you finish: a separate check (not the person) found ${issues.length} item(s). Handle them, then give the person your whole answer again: everything your last answer said that still holds, corrected, with these folded in. They may read only your last message.`,
         ]
-      : [`[deepseek-supervisor] A separate check (not the person) found ${issues.length} item(s) to handle now:`]),
+      : [`[receipts] A separate check (not the person) found ${issues.length} item(s) to handle now:`]),
     ...issues.map(itemText),
     '',
-    'For each: fix it your own way, or tell the person plainly and write `[ysk#<id> told]` in that reply.',
+    'For each: fix it your own way, or tell the person plainly and write `[receipt#<id> told]` in that reply.',
     'An item closes on evidence, not on your word: a check that passes after your last edit, the command it names printing what it should, or the person being told.',
-    'If the check is wrong (the claim depends on something outside the workspace, or the item misreads what happened), say so to the person: `[ysk#<id> refuted: <why>]`.',
+    'If the check is wrong (the claim depends on something outside the workspace, or the item misreads what happened), say so to the person: `[receipt#<id> refuted: <why>]`.',
     ...(o.final === true ? [] : ['Keep working on everything else.']),
     // The note arrives as a user-role row and carries command output from a project
     // that may hold anything: it must not become a channel that hands the model instructions.

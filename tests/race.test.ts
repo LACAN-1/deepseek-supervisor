@@ -38,6 +38,6 @@ test('two checks out at once raise one claim once', async ($, on) => {
   release?.()
   await clock.advance(10)
   await clock.advance(10)
-  const t = (await $.command.run({ command: 'deepseek-supervisor', args: 'issues' } as never)) as { text: string }
+  const t = (await $.command.run({ command: 'receipts', args: 'issues' } as never)) as { text: string }
   expect(t.text.match(/#\d+ \[/g)?.length).toBe(1)
 })

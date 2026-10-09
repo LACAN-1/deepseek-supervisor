@@ -91,6 +91,6 @@ export type Cards = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'deepseek-supervisor': { cards: Cards | null; isHidden: boolean; track: Track }
+    'receipts': { cards: Cards | null; isHidden: boolean; track: Track }
   }
 }

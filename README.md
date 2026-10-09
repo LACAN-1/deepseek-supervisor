@@ -1,6 +1,8 @@
-# deepseek-supervisor
+# receipts
 
-**A supervisor for Claude Code running a weaker model such as DeepSeek: what the model ran is held against what it says, a second, stronger model runs its claims and reviews its changes, and what does not hold goes back to the model before you get the answer.**
+**Show me the receipts. AI checking AI for Claude Code on a weaker model such as DeepSeek: what the model ran is held against what it says, a second, stronger model runs its claims and reviews its changes, and what does not hold goes back to the model before you get the answer. No receipt, not done.**
+
+Formerly `deepseek-supervisor`; see [Renamed](#renamed-from-deepseek-supervisor).
 
 [中文说明](README.zh-CN.md)
 
@@ -10,7 +12,7 @@ Claude Code ships a side agent, "You should know", that watches Claude at work a
 
 A weaker model needs that more, not less. It goes wrong in a few ways again and again: "all tests pass", said about code changed since the run that passed, or about a run that failed; the same failing command run a third time with blind edits in between; an edit retried against text the file no longer holds; a test bent to fit the bug; a "don't touch config.py" forgotten; a crash on an input the request covers, that no test reaches.
 
-An earlier version of this plugin reviewed the transcript every 6 steps, as "You should know" does. Its items were opinions, and the model could talk its way past them with one quoted line. Measured on DeepSeek, it made no difference. So this one works from evidence: what the session's own tool calls show, and what a command prints. It was built for DeepSeek, but nothing in it is DeepSeek-specific: it works with any Anthropic-compatible endpoint.
+An earlier version of this plugin reviewed the transcript every 6 steps, as "You should know" does. Its items were opinions, and the model could talk its way past them with one quoted line. Measured on DeepSeek, it made no difference. So this one works from evidence, hence the name: a claim needs a receipt, what the session's own tool calls show or what a command prints. It was built for DeepSeek, but nothing in it is DeepSeek-specific: it works with any Anthropic-compatible endpoint.
 
 ## What it does
 
@@ -24,7 +26,7 @@ Code reads the session's own tool calls (what ran, in what order, how it ended) 
 |---|---|---|
 | **stuck** | the same command failed 3 times in a row with the same error (`AssertionError: 5 != 6`), whatever was edited in between | it passes, or its error changes |
 | **edit-miss** | two edits in a row to one file failed because the text to replace is not in it | the file is read again, or an edit goes through |
-| **weakened-test** | an edit to a test file added a skip, removed the assertions, put in one that cannot fail, set an expected value to what the failing run printed, or a command removed a test file. Not when you said the tests may change ("the test is wrong, update it"), and not for a test the model wrote this session | the model tells you (`[ysk#N told]`) |
+| **weakened-test** | an edit to a test file added a skip, removed the assertions, put in one that cannot fail, set an expected value to what the failing run printed, or a command removed a test file. Not when you said the tests may change ("the test is wrong, update it"), and not for a test the model wrote this session | the model tells you (`[receipt#N told]`) |
 | **ignored-constraint** | you said "don't modify config.py" (or 不要改 config.py, or a folder: `vendor/`) and an edit changed it after you said so, before you asked for it to change ("now update config.py") | the model tells you |
 | **failed-check**, **stale-check**, **no-check** | the model says the tests, the build or a check pass (or how they came out), and the last such run failed, or passed before a later edit to code, or none ran | a check passes after the last edit to code; no-check, once any check has run (what it showed is then the other rules' to hold) |
 | **untouched** | it says it changed a file that no tool call touched or named | a tool call names it |
@@ -61,8 +63,8 @@ A short loop the plugin runs itself: a model proposes commands, they run in a th
 Not by the model saying so.
 
 - **fixed**: the record shows what closes it (table above), or its recheck, rerun in a fresh copy at every later check, exits 0. With no copy, an item the verifier raised about a claim can also be closed by its next reading of the code: a judgement, not an exit code.
-- **told**: the model told you about it, writing `[ysk#3 told]`.
-- **refuted**: the model says the check was wrong, `[ysk#3 refuted: why]`; or, for a suspected defect, its own run of the reviewer's command did not show it.
+- **told**: the model told you about it, writing `[receipt#3 told]`.
+- **refuted**: the model says the check was wrong, `[receipt#3 refuted: why]`; or, for a suspected defect, its own run of the reviewer's command did not show it.
 
 ## Safety
 
@@ -136,25 +138,29 @@ From your shell:
 
 ```bash
 claude plugin marketplace add LACAN-1/deepseek-supervisor
-claude plugin install deepseek-supervisor@deepseek-supervisor
+claude plugin install receipts@receipts
 ```
 
-Update later with `claude plugin update deepseek-supervisor@deepseek-supervisor`.
+Update later with `claude plugin update receipts@receipts`.
 
-Or, for one session, from a clone: `claude --plugin-dir /path/to/deepseek-supervisor`. Where you cannot pass a flag (for example a session another app starts), list the folder in `CLAUDE_CODE_PLUGIN_DIRS`.
+Or, for one session, from a clone: `claude --plugin-dir /path/to/clone`. Where you cannot pass a flag (for example a session another app starts), list the folder in `CLAUDE_CODE_PLUGIN_DIRS`.
 
-**It turns itself on only where it is needed.** It checks when `ANTHROPIC_BASE_URL` points at a host that is not Anthropic's. On Anthropic's own endpoint it stays idle, because the built-in "You should know" already runs there. On Bedrock or Vertex, where that variable is unset, run `/deepseek-supervisor on`, or set `DEEPSEEK_SUPERVISOR=on`.
+**It turns itself on only where it is needed.** It checks when `ANTHROPIC_BASE_URL` points at a host that is not Anthropic's. On Anthropic's own endpoint it stays idle, because the built-in "You should know" already runs there. On Bedrock or Vertex, where that variable is unset, run `/receipts on`, or set `RECEIPTS=on`.
+
+### Renamed from deepseek-supervisor
+
+Up to 0.7 this plugin was `deepseek-supervisor`. From 0.8.0 it is `receipts`: it checks any weaker model, not only DeepSeek, and the name says what it asks for. To move over, uninstall the old one and install this one (above). `DEEPSEEK_SUPERVISOR=on` still works, as do `[ysk#3 told]` tags; the command is now `/receipts`. The on/off choice and the check history were kept under the old name, so set the switch again if you had set it. The repository keeps its address.
 
 ## Use
 
 | | |
 |---|---|
-| Status line | `deepseek-supervisor checking · N noted (M open) · last: …`, or why it is idle |
-| `/deepseek-supervisor on` / `off` | Force it on or off, whatever the endpoint. Off also clears the band. |
-| `/deepseek-supervisor auto` | Back to the default: on only away from Anthropic's endpoint. |
-| `/deepseek-supervisor issues` | This session's items: where each stands, the command and what it printed, and what settled it. |
-| `/deepseek-supervisor log` | The last 10 checks: claims checked, defects found, every command run (exit code, time, any refused), the rules raised, token usage. |
-| `DEEPSEEK_SUPERVISOR=on` / `off` | The same as the command, from the environment; the command, once used, wins. |
+| Status line | `receipts checking · N noted (M open) · last: …`, or why it is idle |
+| `/receipts on` / `off` | Force it on or off, whatever the endpoint. Off also clears the band. |
+| `/receipts auto` | Back to the default: on only away from Anthropic's endpoint. |
+| `/receipts issues` | This session's items: where each stands, the command and what it printed, and what settled it. |
+| `/receipts log` | The last 10 checks: claims checked, defects found, every command run (exit code, time, any refused), the rules raised, token usage. |
+| `RECEIPTS=on` / `off` | The same as the command, from the environment; the command, once used, wins. |
 
 Options, in the `/config` menu or under `pluginConfigs` in settings:
 
@@ -174,7 +180,7 @@ In a session you watch, nothing waits on the verifier. In a session nobody watch
 ## Known limits
 
 - **It only checks what the record or a command can show.** A model that did the wrong thing correctly, or misread what you wanted, leaves a record that holds. The verifier's review of the change catches some of that, and only where a command can show it.
-- **The rules read regexes, not meaning.** A project's own test runner under a name they do not know is no run. One whose name says test, check, lint, build, ci or verify (`./scripts/check-all`, `npm run verify`, `manage.py test`) keeps "no run at all" quiet; one that says none of these (`cargo nextest run`, `./go`) does not, so a pass claimed after it is held as unchecked, and the model can answer `[ysk#N refuted: …]`. An edit made through Bash (`sed -i`, a script) is not seen as an edit, which makes the rules miss rather than misfire.
+- **The rules read regexes, not meaning.** A project's own test runner under a name they do not know is no run. One whose name says test, check, lint, build, ci or verify (`./scripts/check-all`, `npm run verify`, `manage.py test`) keeps "no run at all" quiet; one that says none of these (`cargo nextest run`, `./go`) does not, so a pass claimed after it is held as unchecked, and the model can answer `[receipt#N refuted: …]`. An edit made through Bash (`sed -i`, a script) is not seen as an edit, which makes the rules miss rather than misfire.
 - **Without a sandbox the verifier mostly reads.** On Linux it cannot run the project's code; a defect it finds is a hypothesis the model's own run settles.
 - **A turn held at its end costs a step.** When the check is wrong, that step is wasted; the model can say so with `refuted`. Live runs found such misfires, and each became a test (below).
 - **The clone is not your machine.** A claim that depends on something outside the workspace can be judged false in the copy.
@@ -195,7 +201,7 @@ Claude Code writes type declarations into `.claude-plugin/types/` the first time
 | `hooks/prompt.ts` | The claim detector, the verifier's prompt and the parsing of its answers, what may run where, redaction, the note |
 | `hooks/band.tsx` | The band above the prompt |
 | `types/index.d.ts` | The item shape and the plugin's state contract |
-| `tests/*.test.ts` | 80 tests against Claude Code's plugin test kit; the cases marked `live:` are misfires live sessions produced |
+| `tests/*.test.ts` | 81 tests against Claude Code's plugin test kit; the cases marked `live:` are misfires live sessions produced |
 | `eval/` | The same tasks with the plugin and without, scored by code; see [eval/README.md](eval/README.md) |
 
 ## License

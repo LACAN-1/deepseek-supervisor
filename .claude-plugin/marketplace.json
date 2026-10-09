@@ -1,16 +1,16 @@
 {
-  "name": "deepseek-supervisor",
+  "name": "receipts",
   "owner": {
     "name": "LACAN-1"
   },
   "metadata": {
-    "description": "deepseek-supervisor: a supervisor for Claude Code on a weaker third-party model, from evidence: the session's own record, and a second model running things"
+    "description": "receipts (formerly deepseek-supervisor): AI checking AI for Claude Code on a weaker third-party model. No receipt, not done: the session's own record, and a second model running things"
   },
   "plugins": [
     {
-      "name": "deepseek-supervisor",
+      "name": "receipts",
       "source": "./",
-      "description": "A supervisor for Claude Code on a weaker model such as DeepSeek: rules on what the model ran catch circles, bent tests and claims the record contradicts; a second, stronger model runs its claims and reviews its changes; what does not hold goes back to the model before the turn ends"
+      "description": "Show me the receipts: AI checking AI for Claude Code on a weaker model such as DeepSeek. Rules on what the model ran catch circles, bent tests and claims the record contradicts; a second, stronger model runs its claims and reviews its changes; what does not hold goes back to the model before the turn ends"
     }
   ]
 }
