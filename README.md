@@ -111,7 +111,7 @@ Claude Code writes type declarations into `.claude-plugin/types/` the first time
 | `hooks/prompt.ts` | The claim detector, the facts read from the tool calls, the verifier's prompt and the parsing of its answers, what may run where, the note |
 | `hooks/band.tsx` | The band above the prompt |
 | `types/index.d.ts` | The item shape and the plugin's state contract |
-| `tests/*.test.ts` | 15 tests against Claude Code's plugin test kit |
+| `tests/*.test.ts` | 17 tests against Claude Code's plugin test kit |
 
 ## License
 

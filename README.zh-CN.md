@@ -111,7 +111,7 @@ Claude Code 第一次加载插件时，会把类型声明写进 `.claude-plugin/
 | `hooks/prompt.ts` | 结论检测、从工具调用读出的事实、验证者的提示词和对它答复的解析、什么命令能在哪里跑、给模型的提示 |
 | `hooks/band.tsx` | 提示框上方那一栏 |
 | `types/index.d.ts` | 条目的结构和插件状态的约定 |
-| `tests/*.test.ts` | 15 个测试，跑在 Claude Code 的插件测试工具上 |
+| `tests/*.test.ts` | 17 个测试，跑在 Claude Code 的插件测试工具上 |
 
 ## 许可证
 
