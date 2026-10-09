@@ -20,6 +20,15 @@ const CHECK =
   /^(?:pytest|py\.test|unittest|nose2|tox|nox|jest|vitest|mocha|ava|rspec|phpunit|ctest|tsc|mypy|pyright|ruff|flake8|pylint|eslint|go (?:test|build|vet)|cargo (?:test|build|check|clippy)|(?:npm|pnpm|yarn|bun) (?:run )?(?:test|build|lint|check|typecheck)|deno test|bun test|node --test|dotnet (?:test|build)|swift (?:test|build)|mvn|gradle|\.\/gradlew|make|bazel test|claude plugin test|python3?(?:\.\d+)?(?:\s+-[A-Za-z]+)*\s+(?:[\w./-]*\/)?(?:test_[\w-]*|[\w-]*_test|tests?)\.py|(?:(?:ba)?sh\s+|\.\/)[\w./-]*(?:run[_-]?)?tests?[\w-]*\.sh)(?=\s|$)/
 const pieces = (command: string) => command.split(/&&|\|\||[;|\n]/).map(p => p.trim().replace(RUNNER, ''))
 export const isCheckCommand = (command: string) => pieces(command).some(p => CHECK.test(p))
+// What each piece of a command runs, by file name: the program and what it is given
+// (`manage.py test`, `npm run verify`), not the folders they sit in. A utility runs nothing
+// of the project's, and a heredoc's body is text, not commands.
+const runnerNames = (command: string) =>
+  pieces(command.includes('<<') ? (command.split('\n')[0] ?? '') : command).flatMap(p => {
+    const [head = '', ...rest] = p.split(/\s+/)
+    if (UTILITY.test(head)) return []
+    return [head, ...rest.filter(w => !w.startsWith('-'))].map(w => base(w.replace(/["']/g, '').replace(/\/+$/, '')))
+  })
 // Tests run from code given inline, `python3 -c "…unittest.main()…"` or a heredoc that loads
 // the test cases (live, round 5): it calls a test runner, or the tests' own module. Calling the
 // functions by hand is not that.
@@ -35,8 +44,12 @@ const INLINE_CODE = /^\s*(?:cd\s+[^\n;&|]+&&\s*)?(?:python3?(?:\.\d+)?|node)(?:\
 const DENIED = /\brequires? approval\b|contains multiple operations|permission to use .{0,80} (?:was|has been) denied|was denied by|blocked by (?:a |the )?hook|<tool_use_error>/i
 // A runner that is not there ran no checks: "No module named pytest" says nothing of the code.
 const MISSING = /No module named ['"]?(?:pytest|nose2|tox|nox|mypy|pyright|ruff|flake8|pylint|coverage|unittest)\b|\b(?:pytest|jest|vitest|mocha|tsc|eslint|ruff|mypy|tox|cargo|go|npm|pnpm|yarn|make|bun|deno)\b[^\n]{0,20}(?:command )?not found|command not found/i
-// A command that may be the project's own way to run its checks, by its name.
+// A command that may be the project's own way to run its checks, by the name of what it
+// runs: `./scripts/check-all`, `bash ci.sh`, `python3 manage.py test`. Not a file a utility
+// reads (`ls tests/`, `cat ci.yml`), a folder (live, round 6: `find /tmp/x-bent-test-…`), or a
+// script the model wrote this session.
 const MENTIONS_CHECK = /\b(?:tests?|specs?|check|lint|build|ci|verify)\b/i
+const UTILITY = /^(?:ls|cat|less|more|head|tail|wc|grep|egrep|rg|ag|find|fd|tree|file|stat|du|echo|printf|sed|awk|cut|tr|sort|uniq|jq|diff|cmp|cd|pwd|git|mkdir|touch|rm|rmdir|mv|cp|ln|chmod|which|type|tee|xargs|true|false|test|\[|curl|wget|tar|pip3?)$/
 
 // How a run says it failed, whatever pipe hid its exit code.
 const FAILED =
@@ -203,7 +216,8 @@ export const evidenceOf = (rows: readonly Row[]): Evidence => {
         ev.refused.push({ at, command: clip(squash(str(input, 'command')), 120) })
       if (u.tool === 'Bash' && !(failed && DENIED.test(u.text ?? ''))) {
         const command = str(input, 'command')
-        if (MENTIONS_CHECK.test(command) && !INLINE_CODE.test(command)) ev.mentioned = true
+        const mine = (name: string) => ev.edits.some(e => base(e.path) === base(name))
+        if (!INLINE_CODE.test(command) && runnerNames(command).some(n => n !== '' && MENTIONS_CHECK.test(n) && !mine(n))) ev.mentioned = true
         const ok = !failed && !FAILED.test(out)
         ev.bash.push({ at, key: keyOf(command), ok, sig: ok ? '' : signatureOf(out), text: clip(out, 4000) })
         // The line a note shows is the one that says what failed, not "Exit code 1".
