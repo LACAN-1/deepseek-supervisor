@@ -21,9 +21,14 @@ const CHECK =
 const pieces = (command: string) => command.split(/&&|\|\||[;|\n]/).map(p => p.trim().replace(RUNNER, ''))
 export const isCheckCommand = (command: string) => pieces(command).some(p => CHECK.test(p))
 // Tests run from code given inline, `python3 -c "…unittest.main()…"` or a heredoc that loads
-// the test cases and runs them (live, round 5). Calling the functions by hand is not that.
-const INLINE_TESTS = /^\s*(?:cd\s+[^\n;&|]+&&\s*)?python3?(?:\.\d+)?(?:\s+-[A-Za-z]+)*\s+(?:-c\b|-?\s*<<)[\s\S]*?\b(?:unittest\.main|TextTestRunner|pytest\.main)\s*\(/
+// the test cases (live, round 5): it calls a test runner, or the tests' own module. Calling the
+// functions by hand is not that.
+const INLINE_TESTS =
+  /^\s*(?:cd\s+[^\n;&|]+&&\s*)?(?:python3?(?:\.\d+)?|node)(?:\s+-[A-Za-z]+)*\s+(?:-[ce]\b|-?\s*<<)[\s\S]*?(?:\b(?:unittest\.main|TextTestRunner|pytest\.main)\s*\(|\bfrom\s+(?:[\w.]+\.)?test_\w+\s+import\b|\bimport\s+(?:[\w.]+\.)?test_\w+|\brequire\s*\(\s*['"][^'"]*(?:test|spec)[^'"]*['"])/
 const runsTests = (command: string) => isCheckCommand(command) || INLINE_TESTS.test(command)
+// Code the model wrote inline is its own check, not a runner of the project's the rules do
+// not know: calling the function a test calls and comparing the value is no run of the tests.
+const INLINE_CODE = /^\s*(?:cd\s+[^\n;&|]+&&\s*)?(?:python3?(?:\.\d+)?|node)(?:\s+-[A-Za-z]+)*\s+(?:-[ce]\b|-?\s*<<)/
 
 // A command that never ran: refused by the person's permissions or a hook. It is no
 // evidence of anything, and its message often echoes the command itself.
@@ -197,7 +202,7 @@ export const evidenceOf = (rows: readonly Row[]): Evidence => {
         ev.refused.push({ at, command: clip(squash(str(input, 'command')), 120) })
       if (u.tool === 'Bash' && !(failed && DENIED.test(u.text ?? ''))) {
         const command = str(input, 'command')
-        if (MENTIONS_CHECK.test(command)) ev.mentioned = true
+        if (MENTIONS_CHECK.test(command) && !INLINE_CODE.test(command)) ev.mentioned = true
         const ok = !failed && !FAILED.test(out)
         ev.bash.push({ at, key: keyOf(command), ok, sig: ok ? '' : signatureOf(out), text: clip(out, 4000) })
         // The line a note shows is the one that says what failed, not "Exit code 1".

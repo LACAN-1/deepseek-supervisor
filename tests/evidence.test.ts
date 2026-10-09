@@ -364,6 +364,13 @@ test('live: tests run from a heredoc or -c through a test runner are a run; func
   expect(runs(heredoc, 'FAIL: test_total\nAssertionError: 3 != 3.5\n\nFAILED (failures=1)')[0]?.ok).toBe(false)
   expect(runs('python3 -c "import unittest; unittest.main(module=\'test_shop\', exit=False)"', 'OK')).toHaveLength(1)
   expect(runs(byHand, 'ok 6')).toHaveLength(0)
+  // A test's own method, called from inline code, runs the test.
+  expect(runs("python3 -c \"from test_shop import T; T('test_total').test_total(); print('ok')\"", 'ok')).toHaveLength(1)
+  expect(runs('node -e "require(\'./cart.test.js\')"', '')).toHaveLength(1)
   // So a pass claimed after it is borne out.
   expect(judge([ask, say('', edit('/p/shop.py')), say('', bash(heredoc, 'Ran 2 tests in 0.000s\n\nOK')), say('All tests pass.')], 'All tests pass.')).toEqual([])
+  // The function a test calls, run by hand and compared, then "all tests pass": no run of the
+  // tests, and the word "Test" in the model's own code does not make it the project's runner.
+  const handCheck = "python3 << 'EOF'\nfrom shop import parse_price\n# Test parse_price\nprint('Pass:', parse_price('3.50') == 3.5)\nEOF"
+  expect(judge([ask, say('', edit('/p/shop.py')), say('', bash(handCheck, 'Pass: True')), say('All tests pass.')], 'All tests pass.')[0]?.kind).toBe('no-check')
 })
