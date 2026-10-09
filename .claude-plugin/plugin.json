@@ -1,6 +1,6 @@
 {
   "name": "deepseek-supervisor",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "A supervisor for Claude Code on a weaker model such as DeepSeek: rules on what the model ran catch circles, bent tests and claims the record contradicts; a second, stronger model runs its claims and reviews its changes; what does not hold goes back to the model before the turn ends",
   "author": {
     "name": "LACAN-1"
