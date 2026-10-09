@@ -52,7 +52,7 @@ A short loop the plugin runs itself: a model proposes commands, they run in a th
 
 **Which model.** By default the verifier asks for `opus`. DeepSeek's endpoint serves Claude-style names by family: `opus` gets its Pro model, `sonnet` and `haiku` its Flash one. So the work of a Flash session is checked by Pro. Set `verifier_model` to any model your endpoint takes; if the endpoint refuses it, `sonnet` is used.
 
-**When.** During the work, at most every 3 steps and 8 times per prompt of yours, on new claims; its findings reach the model as a note at its next step. At the end of a turn: in a session you watch, after the turn, so nobody waits on it, and what it finds comes back once as a follow-up prompt; in a session nobody watches (`claude -p`, an SDK host), before the turn may end, where what it finds keeps the turn going.
+**When.** During the work, at most every 3 steps, on new claims; its findings reach the model as a note at its next step. At the end of a turn: in a session you watch, after the turn, so nobody waits on it, and what it finds comes back once as a follow-up prompt; in a session nobody watches (`claude -p`, an SDK host), before the turn may end, where what it finds keeps the turn going.
 
 **Where commands run.** The copy is made with `cp -c` (an APFS clone: no data copied) and removed afterwards. Every command also runs under the macOS sandbox (`sandbox-exec`): nothing may be written under your home folder or the real workspace, except the copy. A command that names your real workspace is refused. If no copy can be made (your home folder, the root, a copy over 60 s), or there is no sandbox (not macOS), only read-only commands run, and the rules above carry the rest.
 
@@ -170,7 +170,7 @@ The plugin's store is shared by every session on the machine. It keeps the on/of
 
 ## Cost
 
-The rules on the record call no model and cost nothing: a batch's check took 5 to 30 ms in the live runs. The verifier's check is a fresh request with no history: the claims, your prompt, the change, the facts, and the command output so far; it does not re-read the session. In the live runs above, a check of a turn's end took 2 to 18 s and 1 to 5 model calls on Haiku; on a reasoning model it takes longer. During the work the verifier runs at most 8 checks per prompt of yours; each check makes up to 6 model calls (12 if replies are unreadable and retried). Rechecks of open items run commands only.
+The rules on the record call no model and cost nothing: a batch's check took 5 to 30 ms in the live runs. The verifier's check is a fresh request with no history: the claims, your prompt, the change, the facts, and the command output so far; it does not re-read the session. In the live runs above, a check of a turn's end took 2 to 18 s and 1 to 5 model calls on Haiku; on a reasoning model it takes longer. During the work the verifier checks every new claim, at most once every 3 steps; each check makes up to 6 model calls (12 if replies are unreadable and retried). Rechecks of open items run commands only.
 
 In a session you watch, nothing waits on the verifier. In a session nobody watches (`claude -p`), the turn's end waits for it: in the eval runs, a run with the plugin took 1.5 to 2.1 times as long as one without, the holds included.
 

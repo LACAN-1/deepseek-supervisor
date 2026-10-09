@@ -27,11 +27,11 @@ import { base, claimsOf, clip, COMMAND_MS, COPY_MS, factsOf, isSameItem, MODEL, 
 //   change for a defect it can show with a command (see prompt.ts).
 
 // The verifier looks at most once every MIN_GAP finished steps of the main loop,
-// when the model has claimed something new, and runs at most RUNS_PER_PROMPT
-// checks that call a model between two of the person's prompts (each up to ROUNDS
-// calls, more with retries; rechecks alone, which call none, do not count).
+// and only when the model has claimed something new (each check up to ROUNDS
+// calls, more with retries). No cap per prompt: 0.8.0 had 8, and a session fed by
+// another session's messages (ccds) never saw a prompt of the person's to reset it,
+// so after 8 checks the work went unchecked for the rest of the session.
 const MIN_GAP = 3
-const RUNS_PER_PROMPT = 8
 const CLAIMS_PER_RUN = 12
 const SEEN_KEPT = 200
 // A turn whose answer does not hold is kept going at most twice per prompt of the
@@ -425,10 +425,9 @@ const check = async ($: EngineInterface, list: Rows, o: CheckOptions): Promise<I
   const ruled = [...contradictions(record, o.claims), ...(o.rules === false ? [] : recordFindings(record)), ...(o.answer === undefined ? [] : [...unreported(record, o.answer), ...skipped(record, o.answer)])].filter(
     f => settledBy(record, { rule: f.kind, quote: f.quote, probe: f.probe, saw: f.saw }) === undefined,
   )
-  // During the work the verifier runs at most RUNS_PER_PROMPT checks per prompt; a
-  // turn's answer is always checked. A claim the record already contradicts, or
+  // The verifier runs whenever a check hands it a claim. A claim the record already contradicts, or
   // already bears out, is not handed to it: no model is needed for those.
-  const canRun = o.verifier && (o.kind === 'answer' || (before.runs ?? 0) < RUNS_PER_PROMPT)
+  const canRun = o.verifier
   // Nor a claim said before a later edit to code: it described files that have changed since.
   const lastCodeEdit = record.edits.filter(e => !/\.(?:md|markdown|txt|rst|adoc)$/i.test(e.path)).at(-1)?.at ?? -1
   const isCurrent = (c: string) => (record.saidAt.get(c) ?? Number.MAX_SAFE_INTEGER) > lastCodeEdit
@@ -651,8 +650,9 @@ export const register: Register = (on, options) => {
   // band aging as "You should know" cards do.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
-    // The person's own: typed, from a phone, or the SDK host's turn (`claude -p`).
-    if (result.drop === undefined && (e.origin.kind === 'composer' || e.origin.kind === 'bridge' || e.origin.kind === 'sdk')) {
+    // The person's own: typed, from a phone, or the SDK host's turn (`claude -p`); or
+    // another session's message, the way a lead session hands work over (ccds).
+    if (result.drop === undefined && (e.origin.kind === 'composer' || e.origin.kind === 'bridge' || e.origin.kind === 'sdk' || e.origin.kind === 'peer')) {
       asked = e.text
       turnFrom = await $.clock.now()
       blocks = 0

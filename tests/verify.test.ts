@@ -316,21 +316,31 @@ test('with no sandbox to run under (not macOS), no clone is made and only read-o
   expect(w.removed).toEqual([])
 })
 
-test('the verifier calls a model at most 8 times per prompt of the person\'s during the work', async ($, on) => {
+test('during the work the verifier runs on every new claim, with no cap per prompt', async ($, on) => {
   const w = world(on)
   await start($)
-  // A session grows: each check reads the messages added since the last.
-  for (let k = 0; k < 10; k++) {
+  // A session grows: each check reads the messages added since the last. 0.8.0
+  // stopped at 8 until the person typed again, which in a session fed by another
+  // session's messages never came.
+  for (let k = 0; k < 12; k++) {
     w.state.rows = [...w.state.rows, { role: 'assistant', text: `Step ${k} done.`, toolUses: [] }]
     await steps($, 3)
     await w.clock.advance(10)
   }
-  expect(w.asked.length).toBe(8)
-  await prompt($, 'keep going')
-  w.state.rows = [...w.state.rows, { role: 'assistant', text: 'Step 11 done.', toolUses: [] }]
-  await steps($, 3)
-  await w.clock.advance(10)
-  expect(w.asked.length).toBe(9)
+  expect(w.asked.length).toBe(12)
+})
+
+test('another session\'s message starts a new prompt: the turn may be kept going again', async ($, on) => {
+  const w = world(on, [{ role: 'user', text: 'fix total()', toolUses: [] }, failingRun('a')])
+  w.state.noSandbox = true
+  await start($)
+  await prompt($, 'fix total()')
+  expect((await stop($, 'Fixed. All tests pass.')).block).toContain('The last check run failed')
+  expect((await stop($, 'All tests pass, really.', true)).block).toBeUndefined()
+  // A lead session hands over the next order (ccds): a new prompt, as if typed.
+  await $.prompt.submit({ text: '@ds order: /p/handoff/cc-spec-20261009-200000.md', origin: { kind: 'peer' } } as never)
+  w.state.rows = [...w.state.rows, { role: 'user', text: 'next order', toolUses: [] }, failingRun('b', 'AssertionError: 1 != 2')]
+  expect((await stop($, 'Done. All tests pass.')).block).toContain('The last check run failed')
 })
 
 test('on Anthropic\'s own endpoint it stays idle unless switched on', async ($, on) => {
