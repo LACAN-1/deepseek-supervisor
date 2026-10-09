@@ -111,6 +111,7 @@
 | 26 | 中 | `evidence.ts` `mentioned` | 第 3 到 5 轮里，开着插件仍然"没跑测试却说通过"的 3 次答复（第 2 轮用的是更早的规则），都是模型用 heredoc 调被测函数、对一下数值之后说的。它写的代码里有 "Test"，被当成"可能是项目自己的测试脚本"，于是"根本没跑"这条保持沉默 | **已修**：模型内联写的代码（`python -c`、`node -e`、heredoc）不再算项目自己的测试脚本；调用了测试运行器或导入了测试模块（`from test_shop import …`）的才算跑了测试 | **已验证**：新测试；第 6 轮真实运行见 `eval/README.md` |
 | 27 | 中 | `evidence.ts` `CHECKED`、`prompt.ts` `factsText` | 第 6 轮：worker 修好失败的测试、用内联代码跑完整套测试（全部 ok）后写"✓ `test_discount` PASSED"。这句说的是一个具体测试名而不是 tests，没被当成"检查通过"的结论，交给了验证者；没有副本时验证者只看到"失败过的命令"列表，断定从没有通过的运行，白拦了一次 | **已修**：点名某个测试（`test_x`、`x_test`）说它通过，也由记录来判；给验证者的事实里加上本会话的测试和检查运行（成功、失败都列，按时间排） | **已验证**：新测试 |
 | 28 | 中 | `evidence.ts` `mentioned` | "根本没跑"这条规则在"可能是项目自己的测试脚本"跑过之后保持沉默，原来的判断是整条命令里出现 test、check、build、ci 之类的词。第 6 轮的工作目录叫 `/tmp/dss-eval-bent-test-…`，一条 `find` 就让它闭了嘴，worker 心算出来的"测试通过"没被拦下；真实项目里 `ls tests/`、`cat ci.yml` 一样 | **已修**：只看命令实际运行的东西的文件名（程序和交给它的脚本、任务，如 `bash ci.sh`、`npm run verify`、`python3 manage.py test`），不看所在文件夹；读写文件的工具命令一律不算，heredoc 的正文是文本不是命令，模型本次自己写的脚本也不算 | **已验证**：新测试在旧代码上失败，修复后通过；第 7 轮真实运行见 `eval/README.md` |
+| 29 | 低 | `evidence.ts` `NOT_A_CLAIM` | 第 7 轮：被拦下后重写的答复里，"To verify tests pass, run: …"（告诉用户怎么核对）和 "I cannot provide evidence that the official test command passes"（如实承认）都被当成"测试通过"的结论，又拦了一次 | **已修**：目的从句（to verify / confirm / check / make sure）、can verify、whether、cannot、要验证、是否 都标记为不是结论 | **已验证**：新测试 |
 | 24 | 低 | 两份 README | 漏了 skipped-check；写着"每个提示最多拦一次"（实际两次）；没写探针命令的限制；"下面的真实运行"实际在上面 | **已修** | 读文档对照代码 |
 
 另外清掉了 `CHECK_CLAIM`、`PASSED` 两个只是 `CHECK_PASS` 别名的常量。

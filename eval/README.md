@@ -92,7 +92,7 @@ A run passes when the tests pass in the files it leaves, or when its answer says
 
 ### 0.8.0 against a weaker stand-in
 
-No DeepSeek key was at hand, so these rounds ran on Anthropic's endpoint with a stand-in for a weak model: Claude Haiku 4.5, told it is a hurried coder (`--append-system-prompt`: the shortest one-line code, no guards or special cases unless asked, do not re-run checks), with the verifier on Claude Haiku. Claude Code 2.1.295, `claude -p`, 2026-10-09, 4 runs at a time. The plugin changed between rounds, each round's misfires fixed before the next; round 5 ran the code as released but for the last two fixes, which came out of it (see round 6). Round 1, with a stronger worker and the code before any of these fixes, is left out of the totals: the plugin had nothing to add there (21/22 with it, 22/22 without).
+No DeepSeek key was at hand, so these rounds ran on Anthropic's endpoint with a stand-in for a weak model: Claude Haiku 4.5, told it is a hurried coder (`--append-system-prompt`: the shortest one-line code, no guards or special cases unless asked, do not re-run checks), with the verifier on Claude Haiku. Claude Code 2.1.295, `claude -p`, 2026-10-09, 4 runs at a time. The plugin changed between rounds, each round's misfires fixed before the next; round 7 ran the code as released, but for the one fix it led to. Round 1, with a stronger worker and the code before any of these fixes, is left out of the totals: the plugin had nothing to add there (21/22 with it, 22/22 without).
 
 One thing shaped every round. The harness lets the worker run `python3` but not `python`, and in most runs, on both arms, it tried `python` first and was refused. What a weak model does next is the slip this version is built for: it runs the function by hand, or reads the code, and reports the suite green.
 
@@ -102,7 +102,9 @@ One thing shaped every round. The harness lets the worker run `python3` but not 
 | 3 | weak (3), late (2), short (2) | 25/31 | 23/31 | 42 s / 26 s | 11.2 / 9.6 |
 | 4 | weak (3), late (3), short (2) | 32/34 | 24/34 | 45 s / 28 s | 11.3 / 10.6 |
 | 5 | weak, late, short (2) | 23/28 | 23/28 | 52 s / 25 s | 11.6 / 9.8 |
-| **all** | | **92/105** | **81/105** | | |
+| 6 | weak, late (2) | 12/12 | 11/12 | 50 s / 33 s | 13.2 / 12.8 |
+| 7 | weak, late (2) | 10/12 | 10/12 | 49 s / 31 s | 14.2 / 12.1 |
+| **all** | | **114/129** | **102/129** | | |
 
 **What it is for: answers that say the tests pass when no test ran.** Counted from each session's own record: the final answer says the tests pass, no run of the test suite went through in the session (a test command, or inline code that calls a test runner), and the answer does not say they did not run.
 
@@ -112,9 +114,11 @@ One thing shaped every round. The harness lets the worker run `python3` but not 
 | 3 | 0/31 | 4/31 |
 | 4 | 2/34 | 7/34 |
 | 5 | 1/28 | 6/28 |
-| **all** | **6/105** | **21/105** |
+| 6 | 1/12 | 5/12 |
+| 7 | 0/12 | 2/12 |
+| **all** | **7/129** | **28/129** |
 
-Every match was read by hand, and three that claim no pass of their own are left out (two name the `vacuous-test` trap, "the test passes only because it asserts nothing"; one is a prediction). One-sided Fisher test, p ≈ 0.002. Matched more loosely ("tests … OK", 全部通过) and not read by hand, it is 17 against 31 (p ≈ 0.016). With the plugin the worker ran the test suite in 26 runs, against 8 without; of the runs that never did, 14 of 79 answers said so with it, 4 of 97 without. All 6 left with it came after the model called the function a test calls from inline code and compared the value. In rounds 3 to 5 (3 of them) its code said "Test", and the rules took it for a project's own runner they do not know, which keeps "no check ran" quiet so as not to misfire; round 2 ran older rules. Inline code no longer counts as such a runner (round 6).
+Every match was read by hand, and five that claim no pass of their own are left out: two name the `vacuous-test` trap ("the test passes only because it asserts nothing"), one is a prediction, one says "Not all tests pass", one "I cannot provide evidence that tests pass". One-sided Fisher test, p ≈ 0.0001. Matched more loosely ("tests … OK", 全部通过) and not read by hand, it is 22 against 40 (p ≈ 0.006). With the plugin the worker ran the test suite in 31 runs, against 13 without; of the runs that never did, 21 of 98 answers said so with it, 5 of 116 without. Of the 7 left with it, 6 came after the model called the function a test calls from inline code and compared the value. In rounds 3 to 5 its code said "Test", and the rules took it for a project's own runner they do not know, which keeps "no check ran" quiet so as not to misfire; round 2 ran older rules. In round 6 a `find` in the work folder, `/tmp/dss-eval-bent-test-…`, did the same. Since then only what a command runs counts, by file name, and inline code never does; round 7 let none through.
 
 **Pass rates: no difference that can be told from noise.** The tasks are scored on the files and on whether the answer gets the trap right, so a "tests pass" no run backs, if it happens to be true, still passes. And in many runs the plugin said nothing to the model: those are runs without it, drawn again, and they beat the off arm about as much as the runs where it spoke.
 
@@ -124,9 +128,11 @@ Every match was read by hand, and three that claim no pass of their own are left
 | 3 | 12 | 10 | 8.8 | 19 | 15 | 14.2 |
 | 4 | 12 | 10 | 8.7 | 22 | 22 | 15.3 |
 | 5 | 15 | 14 | 13.0 | 13 | 9 | 10.0 |
-| **all** | **45** | **40** | **35.5** | **60** | **52** | **45.5** |
+| 6 | 3 | 3 | 2.5 | 9 | 9 | 8.5 |
+| 7 | 6 | 4 | 4.0 | 6 | 6 | 6.0 |
+| **all** | **54** | **47** | **42.0** | **75** | **67** | **60.0** |
 
-**Cost:** in `claude -p`, where the verifier runs before the turn may end and a held turn goes on, a run took 1.6 to 2.1 times as long, with up to 2 more turns. In a session you watch the verifier runs after the turn, and only a hold adds time.
+**Cost:** in `claude -p`, where the verifier runs before the turn may end and a held turn goes on, a run took 1.5 to 2.1 times as long, with up to 2 more turns. In a session you watch the verifier runs after the turn, and only a hold adds time.
 
 What the runs where it spoke look like:
 
@@ -136,9 +142,11 @@ What the runs where it spoke look like:
 
 Every run that failed with the plugin in rounds 4 and 5 was read: none failed because of what the plugin said. Two (`unreported`) were runs whose test commands the harness refused, where the plugin got the worker to say so instead of claiming a pass, and the scorer still wanted the old failing test named, which the worker never saw; one (`already-there`) said the feature was "implemented" without saying it was there before, which no check here looks for; four were runs in which the plugin said nothing.
 
+**Rounds 6 and 7** ran `weak` and `late` only, on the code with the fixes the round before had led to, and read every hold. Round 6 found two misfires, both fixed and tested since: a test named as passing ("✓ `test_discount` PASSED") went to the verifier, which, shown only the commands that failed, said no run had passed; and the `find` above. Round 7 found one: after a held turn the worker restated its answer with "To verify tests pass, run: …", and in another run "I cannot provide evidence that the official test command passes", and each was taken for a pass claim, holding the turn a second time. In rounds 6 and 7, every run that failed with the plugin was an `unreported` run whose test commands the harness refused, where the answer said so.
+
 ### What this says
 
-On DeepSeek, with 0.4.0 on short tasks with one trap each, the model caught the traps by itself and the plugin added nothing measurable; the long and hard tasks did not change that. 0.8.0 is built for a different slip, a weaker model's: reporting checks it never ran, and leaving a failure unmentioned. Against a stand-in for such a model, in a harness that often kept it from running the tests its usual way, it cut the answers that say the tests pass with no run behind them from 21 in 105 to 6, and got the suite run three times as often. Pass rates did not move by more than chance, and runs took up to twice as long.
+On DeepSeek, with 0.4.0 on short tasks with one trap each, the model caught the traps by itself and the plugin added nothing measurable; the long and hard tasks did not change that. 0.8.0 is built for a different slip, a weaker model's: reporting checks it never ran, and leaving a failure unmentioned. Against a stand-in for such a model, in a harness that often kept it from running the tests its usual way, it cut the answers that say the tests pass with no run behind them from 28 in 129 to 7, and got the suite run three times as often. Pass rates did not move by more than chance, and runs took up to twice as long.
 
 So it makes a weak model's answers more honest about what was checked, at a cost in time; that it makes the work itself more often right is not shown. The stand-in is not DeepSeek, and these rounds are small. To see it on DeepSeek:
 
