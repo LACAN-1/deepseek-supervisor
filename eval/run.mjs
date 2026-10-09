@@ -92,7 +92,7 @@ if (process.argv.includes('--rescore')) {
 
 // What the plugin did in a run, read from the debug log: passes, items, tokens.
 // 0.4.0 logged a `$.model.fork` per pass and `WATCH {fresh}`; 0.6.0 logs
-// `CHECK {claims, found}` per check (its token use is in /receipts log,
+// `CHECK {claims, found}` per check (its token use is in /deepseek-supervisor log,
 // not the debug log, so the sums below stay 0 for it).
 const pluginStats = log => {
   const json = re =>
@@ -103,10 +103,10 @@ const pluginStats = log => {
         return []
       }
     })
-  const checks = json(/(?:receipts|deepseek-supervisor): CHECK (\{.*\})/g)
+  const checks = json(/deepseek-supervisor: CHECK (\{.*\})/g)
   // 0.8.0 also counts a check that read the turn's change.
-  const passes = [...log.matchAll(/\$\.model\.fork \((?:receipts|deepseek-supervisor)\)/g)].length + checks.filter(c => c.claims > 0 || (c.changes ?? 0) > 0 || (c.rules?.length ?? 0) > 0).length
-  const items = json(/(?:receipts|deepseek-supervisor): WATCH (\{.*\})/g).reduce((n, w) => n + (w.fresh?.length ?? 0), 0) + checks.reduce((n, c) => n + (c.found?.length ?? 0), 0)
+  const passes = [...log.matchAll(/\$\.model\.fork \(deepseek-supervisor\)/g)].length + checks.filter(c => c.claims > 0 || (c.changes ?? 0) > 0 || (c.rules?.length ?? 0) > 0).length
+  const items = json(/deepseek-supervisor: WATCH (\{.*\})/g).reduce((n, w) => n + (w.fresh?.length ?? 0), 0) + checks.reduce((n, c) => n + (c.found?.length ?? 0), 0)
   // 0.7.0: the items its rules on the record raised, with no model call.
   const rules = checks.reduce((n, c) => n + (c.rules?.length ?? 0), 0)
   const forks = [...log.matchAll(/\[plugin_model_fork\] finished: .*?input=(\d+) output=(\d+) cacheRead=(\d+)/g)]

@@ -4,8 +4,8 @@ import type { On } from 'claude-code'
 // What the watcher last noted, above the prompt: the person sees it as it lands, the
 // way "You should know" shows its cards. The model has already read the same items
 // as a note; the band is only the person's copy.
-const cards = atom({ plugin: 'receipts', key: 'cards' } as const, null)
-const isHidden = atom({ plugin: 'receipts', key: 'isHidden' } as const, false)
+const cards = atom({ plugin: 'deepseek-supervisor', key: 'cards' } as const, null)
+const isHidden = atom({ plugin: 'deepseek-supervisor', key: 'isHidden' } as const, false)
 
 const hhmm = (ms: number) => {
   const d = new Date(ms)
@@ -23,7 +23,7 @@ export const registerBand = (on: On) => {
       <Box flexDirection="column">
         <Box>
           <Text bold>
-            receipts · noted {shown.items.length} ({hhmm(shown.at)}){' '}
+            deepseek-supervisor · noted {shown.items.length} ({hhmm(shown.at)}){' '}
           </Text>
           <Button key="hide" label="Hide" onPress={() => update($, isHidden, () => true)} />
         </Box>

@@ -204,8 +204,8 @@ if (mode === 'warmup') {
     try {
       log = readFileSync(join(out, `${id}.debug.txt`), 'utf8')
     } catch {}
-    const passes = [...log.matchAll(/\$\.model\.fork \((?:receipts|deepseek-supervisor)\)/g)].length
-    const items = [...log.matchAll(/(?:receipts|deepseek-supervisor): WATCH (\{.*\})/g)].reduce((n, m) => {
+    const passes = [...log.matchAll(/\$\.model\.fork \(deepseek-supervisor\)/g)].length
+    const items = [...log.matchAll(/deepseek-supervisor: WATCH (\{.*\})/g)].reduce((n, m) => {
       try {
         return n + JSON.parse(m[1]).fresh.length
       } catch {

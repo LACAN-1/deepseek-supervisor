@@ -1,8 +1,6 @@
-# receipts
+# deepseek-supervisor
 
-**Show me the receipts：拿证据来。给接了较弱模型（比如 DeepSeek）的 Claude Code 做 AI 审 AI：拿模型实际跑过的东西核对它说的话；让第二个、更强的模型去跑它的结论、审它的改动；对不上的，在答复交到你手里之前就退回给模型。没有证据，就不算完成。**
-
-原名 `deepseek-supervisor`，见[改名说明](#从-deepseek-supervisor-改名)。
+**给接了较弱模型（比如 DeepSeek）的 Claude Code 配一个监工：拿模型实际跑过的东西核对它说的话；让第二个、更强的模型去跑它的结论、审它的改动；对不上的，在答复交到你手里之前就退回给模型。**
 
 [English](README.md)
 
@@ -12,7 +10,7 @@ Claude Code 自带一个旁路代理 "You should know"，看着 Claude 干活，
 
 能力一般的模型更需要有人看着。它反复栽在同几个地方："测试全过"，说的却是之后又改过的代码，或者一次失败的运行；同一条失败的命令跑第三遍，中间盲改；拿文件里已经不存在的文本反复做 Edit；把测试改成迁就 bug；忘了你说过"不要改 config.py"；对请求里明明涵盖、但没有测试覆盖的输入直接崩溃。
 
-这个插件的早期版本像 "You should know" 一样，每 6 步审一遍对话记录。它提出的条目都是意见，模型引一句话就能糊弄过去；在 DeepSeek 上实测，开不开没有区别。所以现在的版本只认证据，名字也由此而来：每条结论都要有"收据"，也就是会话自己的工具调用记录，或者命令实际打印出来的东西。它是为 DeepSeek 写的，但里面没有任何只针对 DeepSeek 的东西，任何兼容 Anthropic 接口的服务都能用。
+这个插件的早期版本像 "You should know" 一样，每 6 步审一遍对话记录。它提出的条目都是意见，模型引一句话就能糊弄过去；在 DeepSeek 上实测，开不开没有区别。所以现在的版本只认证据：会话自己的工具调用记录，以及命令实际打印出来的东西。它是为 DeepSeek 写的，但里面没有任何只针对 DeepSeek 的东西，任何兼容 Anthropic 接口的服务都能用。
 
 ## 它做什么
 
@@ -26,7 +24,7 @@ Claude Code 自带一个旁路代理 "You should know"，看着 Claude 干活，
 |---|---|---|
 | **stuck 原地打转** | 同一条命令连续 3 次以同样的错误失败（如 `AssertionError: 5 != 6`），不管中间改了什么 | 它通过了，或者错误变了 |
 | **edit-miss 拿过期内容改文件** | 对同一个文件连续两次 Edit 都失败，因为要替换的文本不在文件里 | 重新读了这个文件，或者有一次 Edit 成功 |
-| **weakened-test 削弱测试** | 对测试文件的修改加了 skip、删掉了断言、换成永远不会失败的断言、把期望值改成失败运行打印出来的值，或者用命令删掉了测试文件。你明确说过测试可以改（"测试写错了，改一下测试"）时不算；模型本次会话自己写的测试也不算 | 模型告诉你（`[receipt#N told]`） |
+| **weakened-test 削弱测试** | 对测试文件的修改加了 skip、删掉了断言、换成永远不会失败的断言、把期望值改成失败运行打印出来的值，或者用命令删掉了测试文件。你明确说过测试可以改（"测试写错了，改一下测试"）时不算；模型本次会话自己写的测试也不算 | 模型告诉你（`[ysk#N told]`） |
 | **ignored-constraint 违背明确指示** | 你说过"不要改 config.py"（或 don't modify config.py，或一个目录如 `vendor/`），之后、在你又要求改它（"现在可以改 config.py 了"）之前，有修改动了它 | 模型告诉你 |
 | **failed-check / stale-check / no-check** | 模型说测试、构建或检查通过了（或者说了它们跑出来的结果），但最后一次这类运行失败了，或者通过之后又改了代码，或者根本没跑过 | 最后一次改代码之后，有一次检查通过；no-check 只要有任何一次检查跑过就关（那次跑出来的结果交给其他规则核对） |
 | **untouched 说改了却没碰** | 说改了某个文件，但没有任何工具调用碰过、甚至提到过它 | 某个工具调用提到了它 |
@@ -63,8 +61,8 @@ Claude Code 自带一个旁路代理 "You should know"，看着 Claude 干活，
 不是模型说了算。
 
 - **fixed**：记录里出现了能关闭它的东西（见上表），或者它的复查命令在之后每次检查时于新副本里重跑、退出码为 0。没有副本时，验证者对某条结论开的条目，也可能由它下一次读代码的判断关掉：那是判断，不是退出码。
-- **told**：模型告诉了你，写上 `[receipt#3 told]`。
-- **refuted**：模型说检查错了，写 `[receipt#3 refuted: 原因]`；或者对一个"疑似缺陷"，模型自己跑审查者给的命令，没看到那段文本。
+- **told**：模型告诉了你，写上 `[ysk#3 told]`。
+- **refuted**：模型说检查错了，写 `[ysk#3 refuted: 原因]`；或者对一个"疑似缺陷"，模型自己跑审查者给的命令，没看到那段文本。
 
 ## 安全
 
@@ -138,29 +136,25 @@ DSS_CMD=claude DSS_ARGS="--model deepseek-v4-flash" node eval/run.mjs --suite la
 
 ```bash
 claude plugin marketplace add LACAN-1/deepseek-supervisor
-claude plugin install receipts@receipts
+claude plugin install deepseek-supervisor@deepseek-supervisor
 ```
 
-以后更新用 `claude plugin update receipts@receipts`。
+以后更新用 `claude plugin update deepseek-supervisor@deepseek-supervisor`。
 
-也可以从克隆下来的目录只加载一次：`claude --plugin-dir /path/to/clone`。如果没法加命令行参数（比如会话是别的应用启动的），把这个目录写进 `CLAUDE_CODE_PLUGIN_DIRS`。
+也可以从克隆下来的目录只加载一次：`claude --plugin-dir /path/to/deepseek-supervisor`。如果没法加命令行参数（比如会话是别的应用启动的），把这个目录写进 `CLAUDE_CODE_PLUGIN_DIRS`。
 
-**它只在需要的地方启动。** `ANTHROPIC_BASE_URL` 指向的不是 Anthropic 的地址时，它才开始检查。接 Anthropic 官方接口时它保持待机，因为自带的 "You should know" 已经在运行了。用 Bedrock 或 Vertex 时这个变量没有设置，想用的话运行 `/receipts on`，或者设置 `RECEIPTS=on`。
-
-### 从 deepseek-supervisor 改名
-
-0.7 及以前，这个插件叫 `deepseek-supervisor`；从 0.8.0 起改名 `receipts`：它能审任何能力较弱的模型，不只是 DeepSeek，名字也直接说出它要的东西。迁移方法：卸载旧插件，按上面的命令装新的。`DEEPSEEK_SUPERVISOR=on` 和 `[ysk#3 told]` 这类旧标签仍然有效；命令改成了 `/receipts`。开关设置和检查历史存在旧名字下面，所以之前手动设过开关的，要重新设一次。仓库地址不变。
+**它只在需要的地方启动。** `ANTHROPIC_BASE_URL` 指向的不是 Anthropic 的地址时，它才开始检查。接 Anthropic 官方接口时它保持待机，因为自带的 "You should know" 已经在运行了。用 Bedrock 或 Vertex 时这个变量没有设置，想用的话运行 `/deepseek-supervisor on`，或者设置 `DEEPSEEK_SUPERVISOR=on`。
 
 ## 使用
 
 | | |
 |---|---|
-| 状态栏 | `receipts checking · N noted (M open) · last: …`，待机时显示原因 |
-| `/receipts on` / `off` | 不管接的是哪个接口，强制打开或关闭。关闭时也会清掉提示框上方那一栏 |
-| `/receipts auto` | 恢复默认：只在非 Anthropic 接口上工作 |
-| `/receipts issues` | 本次会话的条目：各自的状态、跑的命令和输出、是什么关掉了它 |
-| `/receipts log` | 最近 10 次检查：核对了哪些结论、发现的缺陷、跑过的每条命令（退出码、耗时、是否被拒）、触发的规则、token 用量 |
-| `RECEIPTS=on` / `off` | 和命令作用相同，从环境变量设置；用过命令之后以命令为准 |
+| 状态栏 | `deepseek-supervisor checking · N noted (M open) · last: …`，待机时显示原因 |
+| `/deepseek-supervisor on` / `off` | 不管接的是哪个接口，强制打开或关闭。关闭时也会清掉提示框上方那一栏 |
+| `/deepseek-supervisor auto` | 恢复默认：只在非 Anthropic 接口上工作 |
+| `/deepseek-supervisor issues` | 本次会话的条目：各自的状态、跑的命令和输出、是什么关掉了它 |
+| `/deepseek-supervisor log` | 最近 10 次检查：核对了哪些结论、发现的缺陷、跑过的每条命令（退出码、耗时、是否被拒）、触发的规则、token 用量 |
+| `DEEPSEEK_SUPERVISOR=on` / `off` | 和命令作用相同，从环境变量设置；用过命令之后以命令为准 |
 
 选项，在 `/config` 菜单里设置，或写在 settings 的 `pluginConfigs` 下：
 
@@ -180,7 +174,7 @@ claude plugin install receipts@receipts
 ## 已知局限
 
 - **它只查记录或命令能证明的东西。** 模型把错的事做对了，或者误解了你要什么，留下的记录都是成立的。验证者审查改动能抓到其中一部分，也只限于命令能证明的那部分。
-- **规则看的是正则，不是语义。** 项目自己的测试脚本名字认不出来时不算跑过测试。名字里带 test、check、lint、build、ci、verify 的（`./scripts/check-all`、`npm run verify`、`manage.py test`），"根本没跑"这条会保持沉默；都不带的（`cargo nextest run`、`./go`）不会，之后说测试通过会被当成没核实，模型可以用 `[receipt#N refuted: …]` 说明。通过 Bash 改的文件（`sed -i`、脚本）不算改动，这会让规则漏报，而不是误报。
+- **规则看的是正则，不是语义。** 项目自己的测试脚本名字认不出来时不算跑过测试。名字里带 test、check、lint、build、ci、verify 的（`./scripts/check-all`、`npm run verify`、`manage.py test`），"根本没跑"这条会保持沉默；都不带的（`cargo nextest run`、`./go`）不会，之后说测试通过会被当成没核实，模型可以用 `[ysk#N refuted: …]` 说明。通过 Bash 改的文件（`sed -i`、脚本）不算改动，这会让规则漏报，而不是误报。
 - **没有沙箱时验证者基本只能读。** 在 Linux 上它跑不了项目代码；它发现的缺陷是一个假设，由模型自己的运行来定。
 - **在回合结束时拦下要多花一步。** 检查错了，这一步就白花了；模型可以用 `refuted` 说明。真实运行里找到过这样的误报，每一个都已经写成了测试（见下）。
 - **副本不等于你的机器。** 依赖工作区以外东西的结论，在副本里可能被判不成立。
@@ -201,7 +195,7 @@ Claude Code 第一次加载插件时，会把类型声明写进 `.claude-plugin/
 | `hooks/prompt.ts` | 结论检测、验证者的提示词和对它答复的解析、什么命令能在哪里跑、脱敏、给模型的提示 |
 | `hooks/band.tsx` | 提示框上方那一栏 |
 | `types/index.d.ts` | 条目的结构和插件状态的约定 |
-| `tests/*.test.ts` | 81 个测试，跑在 Claude Code 的插件测试工具上；标着 `live:` 的，是真实运行里出现过的误报 |
+| `tests/*.test.ts` | 80 个测试，跑在 Claude Code 的插件测试工具上；标着 `live:` 的，是真实运行里出现过的误报 |
 | `eval/` | 同一批任务开插件和不开插件各跑一遍，由代码打分；见 [eval/README.md](eval/README.md) |
 
 ## 许可证
