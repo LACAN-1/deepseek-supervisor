@@ -163,6 +163,18 @@ test('facts come from the tool calls, not from what the model said about them', 
   ])
   expect(f.errors[0]).toContain('Traceback')
   expect(f.unopened).toEqual(['out/chart.png'])
+  // A search or listing names images, it does not make them (2026-10-09: a grep of a doc
+  // showing `--blind shot1.png` raised shot1.png three times; an `ls` re-raised one read).
+  const read = factsOf([
+    { role: 'assistant', text: '', toolUses: [
+      { tool: 'Bash', input: { command: 'cd "/p/a b" && python3 gen.py' }, text: 'saved pelican.png' },
+      { tool: 'Read', input: { file_path: '/p/a b/pelican.png' } },
+      { tool: 'Bash', input: { command: 'grep -n -A 25 "agy-job" ~/.claude/skills/ccds/delegates.md 2>&1 | head -100' }, text: '32:agy-job NAME --blind shot1.png [shot2.png …]' },
+      { tool: 'Bash', input: { command: 'cd "/p/a b" && ls -la; find ~ -name "shot*.png" 2>/dev/null | head' }, text: 'pelican.png\npelican.html' },
+      { tool: 'Grep', input: { pattern: 'png' }, text: 'docs/shot3.png' },
+    ] },
+  ])
+  expect(read.unopened).toEqual([])
   expect(isSameItem({ quote: '- All tests pass and total() is correct.' }, { quote: 'All tests pass and total() is correct.' })).toBe(true)
 })
 
@@ -290,6 +302,15 @@ test('an image the model speaks of and never opened is raised by rule, and settl
   await steps($, 3)
   await w.clock.advance(10)
   expect(await issues($)).toContain('[fixed] chart.png was made')
+})
+
+test('an image is raised when named, not when the answer only speaks of a picture', async ($, on) => {
+  const made = { tool_use_id: 'p', tool: 'Bash', input: { command: 'python3 chart.py' }, text: 'wrote chart.png' }
+  const w = world(on, [{ role: 'user', text: 'plot sales', toolUses: [] }, { role: 'assistant', text: '我自己读过图确认过，没问题。', toolUses: [made] }])
+  await start($)
+  await steps($, 3)
+  await w.clock.advance(10)
+  expect(await issues($)).not.toContain('never opened')
 })
 
 test('with no copy, the verifier is told so and nothing that writes runs in the real workspace', async ($, on) => {
@@ -773,4 +794,30 @@ test('a change the reviewer read to the end is not read again; one edited since 
   await stop($, 'An empty cart now averages to 0.')
   expect(w.asked.length).toBe(2)
   expect(w.asked[1]).toContain('if prices else 0')
+})
+
+// 2026-10-09: the answer described the rules in a table; "把测试改到通过" read as a pass with
+// no run. The model refuted it, then quoted the same row in its whole answer again, and
+// the same item came back as new.
+test('live: words the model refuted a rule on are not raised again when it quotes them', async ($, on) => {
+  const row = '| 记录规则 | 每批工具调用后 | 只看会话自己的记录，抓"绕圈、把测试改到通过" |'
+  const w = world(on, [{ role: 'user', text: '介绍一下这个插件', toolUses: [] }])
+  w.state.noSandbox = true
+  await start($)
+  await prompt($, '介绍一下这个插件')
+  w.state.rows = [...w.state.rows, { role: 'assistant', text: row, toolUses: [] }]
+  expect((await stop($, row)).block).toContain('#1 No test, build or check command has run')
+  // It looks again (no test among it), then refutes, quoting the row once more.
+  const look = { tool_use_id: 'l', tool: 'Bash', input: { command: 'ls' }, text: 'pelican.html' }
+  const refuted = `[ysk#1 refuted: 这一行在描述规则，不是测试结果]\n${row}`
+  w.state.rows = [...w.state.rows, { role: 'assistant', text: '', toolUses: [look] }, { role: 'assistant', text: refuted, toolUses: [] }]
+  // The refuting answer quotes the row again: the tag closes #1, and the quote is no #2.
+  expect((await stop($, refuted, true)).block).toBeUndefined()
+  await end($, refuted)
+  await w.clock.advance(10)
+  expect(await issues($)).toContain('#1 [refuted]')
+  expect(await issues($)).not.toContain('#2')
+  await prompt($, '再完整说一遍')
+  w.state.rows = [...w.state.rows, { role: 'user', text: '再完整说一遍', toolUses: [] }, { role: 'assistant', text: row, toolUses: [] }]
+  expect((await stop($, row)).block).toBeUndefined()
 })

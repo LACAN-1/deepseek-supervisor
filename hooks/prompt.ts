@@ -70,6 +70,9 @@ export type Facts = {
   runs?: string[]
 }
 
+// A command made of readers only (cat, grep, ls, find…), after an optional `cd dir &&`.
+const onlyReads = (command: string) => refusal(command.replace(/^\s*cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*&&\s*/, ''), 'read-only', '') === undefined
+
 export const factsOf = (rows: readonly Row[]): Facts => {
   const uses = rows.filter(r => r.role === 'assistant').flatMap(r => r.toolUses ?? [])
   const errors: string[] = []
@@ -87,6 +90,9 @@ export const factsOf = (rows: readonly Row[]): Facts => {
       if (was !== undefined) was.read = at
       return
     }
+    // A search or listing names images it found, not ones it made: a doc that
+    // mentions shot1.png made nothing (2026-10-09).
+    if (u.tool === 'Grep' || u.tool === 'Glob' || (u.tool === 'Bash' && typeof input.command === 'string' && onlyReads(input.command))) return
     for (const m of `${leaves(input).join(' ')} ${out}`.matchAll(IMAGE)) {
       const was = seen.get(base(m[0]))
       seen.set(base(m[0]), { path: m[0], at, read: was?.read ?? -1 })

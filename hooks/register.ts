@@ -335,13 +335,12 @@ const verify = async ($: EngineInterface, input: VerifyInput): Promise<VerifyRes
   }
 }
 
-const IMAGE_WORDS = /图|画面|截图|chart|plot|image|figure|picture|graph/i
-
 // A rule, not a model: an image made and never opened since, that the model has
-// just said something about (named it, or spoke of a chart while at most 3 sit unopened).
+// just named. Speaking of "the chart" without a name no longer counts: 图 alone
+// tied a claim about an image it had read to every other one unopened (2026-10-09).
 const unopenedClaimed = (facts: Facts, claims: readonly string[]) =>
   facts.unopened
-    .map(path => [path, claims.find(c => c.includes(base(path)) || (IMAGE_WORDS.test(c) && facts.unopened.length <= 3))] as const)
+    .map(path => [path, claims.find(c => c.includes(base(path)))] as const)
     .filter((x): x is readonly [string, string] => x[1] !== undefined)
 
 // The model's own word that it told the person: `[ysk#3 told]`, `[ysk#3 refuted: …]`.
@@ -371,6 +370,9 @@ const isKnown = (f: Finding, items: readonly Issue[], saidAt: (quote: string) =>
       default:
         return (
           (i.status === 'open' && isCheckKind(i.rule) && i.rule !== 'unreported-failure' && i.rule !== 'skipped-check') ||
+          // The model said this rule misread these words: quoting them again in the
+          // corrected answer is no new claim (2026-10-09). Another rule on them still is.
+          (i.status === 'refuted' && i.rule === f.kind && isSameItem({ quote: f.quote }, i)) ||
           (isSameItem({ quote: f.quote }, i) && (i.status === 'open' || saidAt(f.quote) <= (i.said ?? (i.pos ?? Number.MAX_SAFE_INTEGER) - 1)))
         )
     }
@@ -502,7 +504,7 @@ const check = async ($: EngineInterface, list: Rows, o: CheckOptions): Promise<I
       })
     }
     for (const [path, claim] of images) {
-      if ([...issues, ...fresh].some(i => i.probe === `Read ${path}`)) continue
+      if ([...issues, ...fresh].some(i => i.probe.startsWith('Read ') && base(i.probe) === base(path))) continue
       fresh.push({ id: next(), at: done, from: 'rule', what: `${base(path)} was made and never opened since, yet the model has stated something about it`, quote: claim, probe: `Read ${path}`, cost: 'what the picture shows is asserted, not seen', status: 'open' })
     }
     found = fresh
