@@ -67,10 +67,11 @@ const CHECK_PASS = new RegExp(
   String.raw`\b${CHECKED}\b[^.\n]{0,40}?\b${OUTCOME}\b|\b${OUTCOME}\b[^.\n]{0,12}?\b${CHECKED}\b|\bcompiles?\b|(?:测试|单测|用例|构建|编译|类型检查)[^。\n]{0,10}(?:通过|全过|跑通|成功|全绿|绿了|没问题|无报错)|(?:全部|都)(?:通过|跑通)`,
   'i',
 )
-// A plan, a hope or an honest "not yet" is no claim.
+// A plan, a hope or an honest "not yet" is no claim; nor is how to check ("to verify the
+// tests pass, run …") or that it could not be ("I cannot provide evidence that it passes").
 // So is what held before: "the test passed before the edit" says nothing of now.
 const NOT_A_CLAIM =
-  /\b(?:will|going to|let me|let's|i'll|next|then i|should|need to|try(?:ing)? to|once|after (?:i|we)|if|not|no longer|fail(?:s|ed|ing|ure)?|until|before|earlier|previously|prior|originally|at first|used to|unverified|unchecked|untested|unconfirmed|claimed|(?:i|you) (?:said|stated|wrote))\b|\bwithout (?:actually |really |first )?(?:run|runn|check|test|verif)\w*|n['’]t\b|将|稍后|接下来|然后|待会|需要|准备|计划|打算|让我|我来|下一步|如果|等到|等待|没|未|不|失败|报错|之前|此前|原先|先前|原来|改动前|修改前|未验证|未经验证|没有验证/i
+  /\b(?:will|going to|let me|let's|i'll|next|then i|should|need to|try(?:ing)? to|once|after (?:i|we)|if|not|cannot|whether|no longer|fail(?:s|ed|ing|ure)?|until|before|earlier|previously|prior|originally|at first|used to|unverified|unchecked|untested|unconfirmed|claimed|(?:i|you) (?:said|stated|wrote))\b|\bwithout (?:actually |really |first )?(?:run|runn|check|test|verif)\w*|\bto (?:verify|confirm|check|ensure|make sure)\b|\b(?:can|could|may|might) (?:verify|confirm|check)\b|n['’]t\b|(?:要|可以|请)(?:验证|确认|检查)|是否|将|稍后|接下来|然后|待会|需要|准备|计划|打算|让我|我来|下一步|如果|等到|等待|没|未|不|失败|报错|之前|此前|原先|先前|原来|改动前|修改前|未验证|未经验证|没有验证/i
 // An answer that owns up to a failure: whatever else it says, it said that.
 const OWNS_UP = /\bfail(?:s|ed|ing|ure|ures)?\b|\berrors?\b|\bbroken\b|\bbreaks?\b|\bnot (?:yet )?pass|\b(?:doesn|don|isn|aren|didn)'?t (?:pass|work)|\bstill (?:red|failing)|\bcrash|失败|报错|错误|未通过|没通过|不通过|没有通过|还有问题|仍有问题|跑不过/i
 // Saying a file was changed.

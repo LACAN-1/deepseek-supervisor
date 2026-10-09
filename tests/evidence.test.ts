@@ -255,7 +255,7 @@ test('live: a command named for checks that the rules do not know keeps "no run 
 })
 
 test('live: owning up to an earlier claim is no claim', async () => {
-  for (const c of ['I claimed the tests pass without actually running them.', 'Earlier I said all tests pass; I had not run them.'])
+  for (const c of ['I claimed the tests pass without actually running them.', 'Earlier I said all tests pass; I had not run them.', 'I cannot provide evidence that the official test command passes.', 'To verify tests pass, run: `python test_shop.py`', 'You can confirm the tests pass with `python3 -m unittest`.', '要验证测试是否通过，运行 python3 -m unittest。'])
     expect(judge([ask, say(c)], c)).toEqual([])
 })
 
