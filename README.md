@@ -143,6 +143,13 @@ claude plugin install deepseek-supervisor@deepseek-supervisor
 
 Update later with `claude plugin update deepseek-supervisor@deepseek-supervisor`.
 
+An earlier version, by its tag (`v0.4.0`: the transcript reviewed every 6 steps, as "You should know" does; or `v0.8.0`). If the marketplace is already added, remove it first with `claude plugin marketplace remove deepseek-supervisor`.
+
+```bash
+claude plugin marketplace add "LACAN-1/deepseek-supervisor#v0.4.0"
+claude plugin install deepseek-supervisor@deepseek-supervisor
+```
+
 Or, for one session, from a clone: `claude --plugin-dir /path/to/deepseek-supervisor`. Where you cannot pass a flag (for example a session another app starts), list the folder in `CLAUDE_CODE_PLUGIN_DIRS`.
 
 **It turns itself on only where it is needed.** It checks when `ANTHROPIC_BASE_URL` points at a host that is not Anthropic's. On Anthropic's own endpoint it stays idle, because the built-in "You should know" already runs there. On Bedrock or Vertex, where that variable is unset, run `/deepseek-supervisor on`, or set `DEEPSEEK_SUPERVISOR=on`.

@@ -143,6 +143,13 @@ claude plugin install deepseek-supervisor@deepseek-supervisor
 
 以后更新用 `claude plugin update deepseek-supervisor@deepseek-supervisor`。
 
+想装旧版，按标签装（`v0.4.0`：像 "You should know" 那样每 6 步审一遍对话记录；或 `v0.8.0`）。已经添加过这个 marketplace 的，先用 `claude plugin marketplace remove deepseek-supervisor` 移除。
+
+```bash
+claude plugin marketplace add "LACAN-1/deepseek-supervisor#v0.4.0"
+claude plugin install deepseek-supervisor@deepseek-supervisor
+```
+
 也可以从克隆下来的目录只加载一次：`claude --plugin-dir /path/to/deepseek-supervisor`。如果没法加命令行参数（比如会话是别的应用启动的），把这个目录写进 `CLAUDE_CODE_PLUGIN_DIRS`。
 
 **它只在需要的地方启动。** `ANTHROPIC_BASE_URL` 指向的不是 Anthropic 的地址时，它才开始检查。接 Anthropic 官方接口时它保持待机，因为自带的 "You should know" 已经在运行了。用 Bedrock 或 Vertex 时这个变量没有设置，想用的话运行 `/deepseek-supervisor on`，或者设置 `DEEPSEEK_SUPERVISOR=on`。
