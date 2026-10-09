@@ -204,6 +204,19 @@ test('a claim is checked once; an item closes when its recheck passes, whatever 
   expect(await issues($)).toContain('#1 [fixed] One test fails')
 })
 
+test('a recheck that names the real workspace is refused like any other command', async ($, on) => {
+  const w = world(on)
+  w.state.verifier = [FALSE.replace('"recheck":"python3 -m unittest"', '"recheck":"cd /p && python3 -m unittest"')]
+  await start($)
+  await steps($, 3)
+  await w.clock.advance(10)
+  w.state.rows = [...CLAIMED, { role: 'assistant', text: 'Done again.', toolUses: [] }]
+  await steps($, 3)
+  await w.clock.advance(10)
+  expect(w.ran.map(r => r.command)).not.toContain('cd /p && python3 -m unittest')
+  expect(await issues($)).toContain('#1 [open]')
+})
+
 test('the claims of a turn\'s answer are checked when it ends; what does not hold comes back once as a prompt', async ($, on) => {
   const w = world(on, [{ role: 'user', text: 'fix total()', toolUses: [] }])
   w.state.verifier = [FALSE.replace('"claim":1', '"claim":2')]

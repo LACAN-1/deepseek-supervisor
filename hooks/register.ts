@@ -170,6 +170,12 @@ const verify = async ($: EngineInterface, input: VerifyInput): Promise<VerifyRes
     // Rechecks run only in a copy: they are the project's own commands and may write.
     if (mode === 'copy') {
       for (const i of input.open.filter(i => (i.recheck ?? '') !== '')) {
+        // A recheck is the verifier's command too: kept to the copy like the rest.
+        const no = refusal(i.recheck ?? '', mode, input.cwd)
+        if (no !== undefined) {
+          result.ran.push({ command: i.recheck ?? '', exitCode: null, ms: 0, refused: no })
+          continue
+        }
         const r = await runIn($, i.recheck ?? '', where, box)
         result.ran.push({ command: i.recheck ?? '', exitCode: r.exitCode, ms: r.ms })
         if (r.exitCode === 0) result.fixed.push({ id: i.id, saw: clip(squash(r.out), 300) || `\`${i.recheck}\` exited 0` })
