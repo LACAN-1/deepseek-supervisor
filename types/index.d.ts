@@ -1,70 +1,69 @@
-/** The kinds of slip the reviewer looks for; anything else is dropped. */
-export type Category =
-  | 'silent-reading'
-  | 'unraised-problem'
-  | 'unbacked-claim'
-  | 'untried-cannot'
-  | 'scope-creep'
-  | 'guessing'
-  | 'silent-change'
-  | 'ignored-instruction'
-
-/** `high`: going on as it is gives the person a wrong or unwanted result. */
-export type Severity = 'high' | 'medium'
-
+/** An item as the band shows it. */
 export type Finding = {
-  category: Category
-  severity: Severity
-  /** What the assistant should check or ask, in one plain sentence. */
+  /** What is wrong, in one plain sentence. */
   what: string
-  /** Copied verbatim from the conversation; a finding whose quote is not found there is dropped. */
-  quote: string
-  /** Where it shows: a file, a command, a step. */
+  /** What shows it: the command that was run and what it printed, or the model's own words. */
   evidence: string
   /** What goes wrong if the assistant keeps going as it is. */
   cost: string
 }
 
-/** A finding the model has been told of, and what became of it. */
-export type Raised = Finding & {
-  id: string
+/** Where an item stands: closed by a command that passes (fixed), or by the model telling the person (told, refuted). */
+export type Status = 'open' | 'fixed' | 'refuted' | 'told'
+
+/** One item put to the model, numbered, tracked until it is settled. */
+export type Issue = {
+  id: number
   /** When it was raised, epoch ms. */
   at: number
-  /** `escalated`: still open after several passes, so the person was told the model let it lie. */
-  status: 'open' | 'resolved' | 'escalated'
-  /** How many later passes found it still open. */
-  seen: number
+  /** Which check raised it: the verifier (a command's output contradicted the model) or a rule in code. */
+  from: 'verify' | 'rule'
+  /**
+   * For a rule on the session's own record: which. `failed-check`, `stale-check`,
+   * `no-check`: a pass claimed against a failed run, against code edited since, or
+   * with no run at all; `untouched`: a file said to be changed that no tool call named.
+   */
+  rule?: 'failed-check' | 'stale-check' | 'no-check' | 'untouched'
+  /** What is actually so, in one plain sentence; never how to fix it. */
+  what: string
+  /** The model's own words the item is about. */
+  quote: string
+  /** The command the verifier ran, or for a rule what would settle it (`Read <path>`). */
+  probe: string
+  /** The verifier's: what the command printed, which contradicts the quote. */
+  saw?: string
+  /** The verifier's: a shell command that exits 0 exactly when the claim holds; it settles the item. */
+  recheck?: string
+  /** What goes wrong if the assistant keeps going as it is. */
+  cost: string
+  status: Status
+  /** When it was settled, epoch ms. */
+  settledAt?: number
+  /** What settled it: the recheck's output, or the line the model wrote. */
+  why?: string
 }
 
-/** What the watcher last noted, drawn in the band above the prompt. */
+/** This session's items; in $.state, so a hot reload keeps them. */
+export type Track = {
+  nextId: number
+  issues: Issue[]
+  /** The model's claims already handed to the verifier, so none is checked twice. */
+  seen: string[]
+  /** How many of the session's messages the checks during the work have read: older ones are not read again. */
+  scanned?: number
+  /** How many checks during the work called a model since the person's last prompt (each may make several calls). */
+  runs: number
+}
+
+/** What was last put to the model, drawn in the band above the prompt. */
 export type Cards = {
   /** When the check that found them settled, epoch ms. */
   at: number
   items: Finding[]
-  /** Items the model was told of and left alone, raised again to the person. */
-  ignored: Finding[]
-}
-
-/** The watcher's own record for the session, held by the host so a reload keeps it. */
-export type Ledger = {
-  /** Main-loop steps since the last pass started. */
-  steps: number
-  /** Passes this session. */
-  passes: number
-  /** Items told to the model this session. */
-  told: number
-  /** The status line's "last:" part. */
-  last: string
-  /** The person's prompts since the band last changed. */
-  promptsSinceCards: number
-  /** Follow-up turns the watcher started since the person's last prompt. */
-  wakes: number
-  nextId: number
-  raised: Raised[]
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    'deepseek-supervisor': { cards: Cards | null; isHidden: boolean; ledger: Ledger }
+    'deepseek-supervisor': { cards: Cards | null; isHidden: boolean; track: Track }
   }
 }

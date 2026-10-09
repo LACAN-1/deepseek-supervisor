@@ -1,61 +1,49 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, ModelForkResult, PluginOptions, Register, SessionMessage, TurnStepResult } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
-import type { Ledger, Raised } from '../types'
+import type { Issue, Track } from '../types'
 import { registerBand } from './band'
-import { grounded, haystackOf, normalize, renderTranscript } from './ground'
-import type { Ask, PassKind } from './prompt'
-import { REVIEWER_SYSTEM, forkPrompt, noteText, parseVerdict, reviewPrompt, wakeText } from './prompt'
+import { contradictions, evidenceOf, settledBy } from './evidence'
+import type { Facts, Mode, VerifyInput, VerifyResult } from './prompt'
+import { base, claimsOf, clip, COMMAND_MS, COPY_MS, factsOf, isSameItem, MODEL, noteText, parseTurn, redact, refusal, ROUNDS, shown, squash, verifyPrompt } from './prompt'
 
-// Claude Code's own "You should know" watches Claude at work, but it is hidden
-// whenever ANTHROPIC_BASE_URL points away from Anthropic (observed on 2.1.290: that
-// one variable alone), so it never loads on a third-party model. It checks every
-// 6 steps (the constant read off the 2.1.290 binary); so does this, by default.
-//
-// The loop this closes, pass by pass:
-//   1. a pass every few steps, and one more when the turn ends, where "done" is said;
-//   2. every finding must quote the conversation verbatim, or it is dropped;
-//   3. what is left reaches the model as a note, and the person in the band;
-//   4. a high-severity finding at the end of a turn wakes the model to settle it;
-//   5. later passes check each item was acted on; one left lying is shown to the
-//      person as ignored.
+// Claude Code's own "You should know" is hidden whenever ANTHROPIC_BASE_URL points
+// away from Anthropic (observed on 2.1.290: that one variable alone), so it never
+// loads on a third-party model. This is not a copy of it: that one reads the
+// transcript and writes cards for a person; this one checks what the model claims
+// by running it (see prompt.ts), during the work and once more when a turn ends.
 
-// Its cards clear after two prompts from the person; so does the band.
+// The verifier looks at most once every MIN_GAP finished steps of the main loop,
+// when the model has claimed something new, and runs at most RUNS_PER_PROMPT
+// checks that call a model between two of the person's prompts (each up to ROUNDS
+// calls, more with retries; rechecks alone, which call none, do not count).
+const MIN_GAP = 3
+const RUNS_PER_PROMPT = 8
+const CLAIMS_PER_RUN = 12
+const SEEN_KEPT = 200
+// A turn whose answer the check contradicts gets one follow-up prompt, at most one
+// per prompt of the person's, so a check can never keep a session going by itself.
+const FOLLOW_UPS_PER_PROMPT = 1
+// "You should know" cards clear after two prompts from the person; so does the band.
 const CLEAR_AFTER_PROMPTS = 2
-// What the watcher has already said, the newest kept; every later pass skips it.
-const RAISED_KEPT = 30
-// An item still open after this many later passes was let lie: the person is told.
-const ESCALATE_AFTER = 2
+const ISSUES_KEPT = 40
 const HISTORY = 50
-// What the independent reviewer reads of the conversation, in characters.
-const TRANSCRIPT_BUDGET = 240_000
 
-// The band's two values, drawn by hooks/band.tsx, and the watcher's own record. The
-// scan wants every file that writes one to name it in a const of its own;
-// types/index.d.ts holds them to one shape. All three are the host's: a reload keeps them.
+// The band's two values, drawn by hooks/band.tsx. The scan wants every file that
+// writes one to name it in a const of its own; types/index.d.ts holds both to one shape.
 const cards = atom({ plugin: 'deepseek-supervisor', key: 'cards' } as const, null)
 const isHidden = atom({ plugin: 'deepseek-supervisor', key: 'isHidden' } as const, false)
-const EMPTY: Ledger = { steps: 0, passes: 0, told: 0, last: '', promptsSinceCards: 0, wakes: 0, nextId: 1, raised: [] }
-const ledger = atom({ plugin: 'deepseek-supervisor', key: 'ledger' } as const, EMPTY)
-
-type Config = { every: number; turnEnd: boolean; maxWakes: number; reviewerModel: string }
-
-const numberOf = (v: unknown, fallback: number, min: number, max: number) =>
-  typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback
-
-const configOf = (options: PluginOptions | undefined): Config => ({
-  every: numberOf(options?.every, 6, 1, 100),
-  turnEnd: options?.turn_end !== false,
-  maxWakes: numberOf(options?.max_wakes, 1, 0, 5),
-  reviewerModel: typeof options?.reviewer_model === 'string' ? options.reviewer_model.trim() : '',
-})
+// The numbered items. In $.state, not a module variable, so a hot reload neither
+// forgets what the model was told nor reuses an id.
+const EMPTY: Track = { nextId: 1, issues: [], seen: [], runs: 0 }
+const track = atom({ plugin: 'deepseek-supervisor', key: 'track' } as const, EMPTY)
 
 const say = ($: EngineInterface, line: string) => $.ui.log(`deepseek-supervisor: ${line}`, { to: 'debug' })
 
 // `on` and `off` are what the person chose; with neither, it runs where the built-in
 // one is hidden: ANTHROPIC_BASE_URL set to a host that is not Anthropic's.
-type Mode = 'auto' | 'on' | 'off'
-const modeOf = async ($: EngineInterface): Promise<Mode> => {
+type Setting = 'auto' | 'on' | 'off'
+const settingOf = async ($: EngineInterface): Promise<Setting> => {
   const v = await $.store.get('mode').catch(() => undefined)
   return v === 'on' || v === 'off' ? v : 'auto'
 }
@@ -69,42 +57,34 @@ const isAnthropic = (url: string | undefined) => {
 const onAnthropic = async ($: EngineInterface) => isAnthropic(await $.env.get('ANTHROPIC_BASE_URL').catch(() => undefined))
 
 const isOn = async ($: EngineInterface) => {
-  const mode = await modeOf($)
-  return mode === 'auto' ? !(await onAnthropic($)) : mode === 'on'
+  const setting = await settingOf($)
+  return setting === 'auto' ? !(await onAnthropic($)) : setting === 'on'
 }
 
-// Only what dies with the module: a pass in flight dies with it too.
-let isWatching = false
-// A turn that ended while a pass was out: its answer, to look at once that pass is back.
-let pendingFinal: string | null = null
-// Bumped by every prompt from the person: a pass that finds it moved does not wake the model.
-let promptEpoch = 0
+let steps = 0
+let isBusy = false
+let promptsSinceCards = 0
+let followUps = 0
+// The person's last prompt, as they typed it: what the claims are checked against.
+let asked = ''
+// This session's count, for the status line; a hot reload starts it over.
+let told = 0
+let last = ''
 
 const hhmm = (ms: number) => {
   const d = new Date(ms)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
-
-const show = async ($: EngineInterface, cfg: Config) => {
+const show = async ($: EngineInterface) => {
   if (!(await isOn($)))
     return $.ui.status(
-      (await modeOf($)) === 'off'
+      (await settingOf($)) === 'off'
         ? 'deepseek-supervisor is off (/deepseek-supervisor on)'
         : 'deepseek-supervisor idle: Anthropic endpoint, where the built-in "You should know" runs (/deepseek-supervisor on to force)',
     )
-  const l = await read($, ledger)
-  const open = l.raised.filter(r => r.status === 'open').length
-  const ignored = l.raised.filter(r => r.status === 'escalated').length
-  $.ui.status(
-    `deepseek-supervisor ${isWatching ? 'reviewing…' : 'watching'}` +
-      (cfg.reviewerModel === '' ? '' : ` (${cfg.reviewerModel})`) +
-      ` · ${l.told} noted` +
-      (open === 0 ? '' : ` · ${open} open`) +
-      (ignored === 0 ? '' : ` · ${ignored} ignored`) +
-      (l.last === '' ? '' : ` · last: ${l.last}`),
-  )
+  const open = (await read($, track)).issues.filter(i => i.status === 'open').length
+  $.ui.status(`deepseek-supervisor checking claims · ${told} noted` + (open === 0 ? '' : ` (${open} open)`) + (last === '' ? '' : ` · last: ${last}`))
 }
 
 const remember = async ($: EngineInterface, entry: Record<string, unknown>) => {
@@ -113,241 +93,370 @@ const remember = async ($: EngineInterface, entry: Record<string, unknown>) => {
   await $.store.set('history', [...list, entry].slice(-HISTORY)).catch(() => undefined)
 }
 
-const costOf = (usage: { cache_read_input_tokens?: number | null; input_tokens: number; output_tokens: number }) => ({
-  cached: usage.cache_read_input_tokens ?? 0,
-  input: usage.input_tokens,
-  output: usage.output_tokens,
-})
-
-// The notes and wakes this watcher wrote are in the transcript too; a finding may not
-// quote them back as its evidence.
-const isOwn = (m: SessionMessage) => m.role === 'user' && m.text.includes('[deepseek-supervisor]')
-
-// What a step's response said and did, for a fork whose prefix may end before it.
-const latestOfStep = (result: TurnStepResult) =>
-  clip(
-    [
-      result.answer,
-      ...result.toolUses.map(u => {
-        let input = ''
-        try {
-          input = JSON.stringify(u.input)
-        } catch {
-          // left out
-        }
-        return `[called ${u.name} ${clip(input, 600)}]`
-      }),
-    ]
-      .filter(s => s !== '')
-      .join('\n'),
-    4000,
-  )
-
-type Reply = { result: ModelForkResult; reviewer: string }
-
-// The reviewer: by default a fork of the session (same model, its prompt cache);
-// with reviewer_model set, that model reads the transcript fresh, outside the
-// author's own framing. A failed independent call falls back to the fork.
-const review = async ($: EngineInterface, cfg: Config, ask: Ask, messages: readonly SessionMessage[] | null): Promise<Reply> => {
-  if (cfg.reviewerModel !== '' && messages !== null) {
-    try {
-      const result = await $.model.complete({
-        model: cfg.reviewerModel,
-        system: [{ text: REVIEWER_SYSTEM, cache: true }],
-        prompt: reviewPrompt(ask, renderTranscript(messages, TRANSCRIPT_BUDGET)),
-        maxTokens: 4096,
-        timeoutMs: 300_000,
-      })
-      if (result.isAnswered || result.reason === 'empty-reply') return { result, reviewer: cfg.reviewerModel }
-      say($, `${cfg.reviewerModel} gave no verdict (${result.reason}${result.reason === 'api-error' ? ` ${result.status} ${result.error}` : ''}); falling back to a fork`)
-    } catch (err) {
-      say($, `${cfg.reviewerModel} refused (${err}); falling back to a fork`)
-    }
+// The verifier's loop: the model proposes commands, they run in a copy, their
+// output goes back, until it answers. A loop of its own, not a subagent: every
+// command passes through here (where it runs, what it may touch, what it cost),
+// nothing lands in the conversation but the note, and every wait is a `$` call,
+// so a hook that waits on it keeps its 10 s budget.
+const runIn = async ($: EngineInterface, command: string, cwd: string, box: string | undefined) => {
+  const start = await $.clock.now()
+  try {
+    const argv = box === undefined ? ['bash', '-c', command] : ['sandbox-exec', '-p', box, 'bash', '-c', command]
+    const r = await $.process.run(argv, { cwd, timeoutMs: COMMAND_MS })
+    // Its output goes to the verifier's endpoint, a third party: credentials are cut out first.
+    return { exitCode: r.exitCode as number | null, out: redact(`${r.stdout}${r.stderr === '' ? '' : `\n[stderr]\n${r.stderr}`}`), ms: (await $.clock.now()) - start }
+  } catch (err) {
+    return { exitCode: null, out: `[did not finish: ${String(err)}]`, ms: (await $.clock.now()) - start }
   }
-  return { result: await $.model.fork({ prompt: forkPrompt(ask) }), reviewer: 'fork' }
 }
 
-type PassOptions = { kind: PassKind; latest: string; canWake: boolean }
+// The clone keeps a command's relative paths off the real files; it does not
+// keep off a script that writes to an absolute path (its own project's, or one
+// under the home folder). So every command runs under the macOS sandbox: nothing
+// may be written under the home folder or the real workspace, and in a clone,
+// only the clone may be. With no sandbox (not macOS), no clone is used and only
+// read-only commands run.
+const SANDBOX = '/usr/bin/sandbox-exec'
+const boxOf = (denied: readonly string[], writable: readonly string[]) =>
+  [
+    '(version 1)(allow default)',
+    `(deny file-write* ${denied.map(d => `(subpath ${JSON.stringify(d)})`).join(' ')})`,
+    ...(writable.length === 0 ? [] : [`(allow file-write* ${writable.map(w => `(subpath ${JSON.stringify(w)})`).join(' ')})`]),
+  ].join('')
 
-// One pass over the work so far. It runs beside the turn, never in its way: the
-// items reach the model as a note it reads at its next step (or as a turn of their
-// own when the turn ended on something it must not leave), and the band above the
-// prompt shows the person the same items.
-const watch = async ($: EngineInterface, cfg: Config, pass: PassOptions) => {
-  const epoch = promptEpoch
+// A clone of the workspace (on APFS no data is copied), or nothing. The home
+// folder or the root is never copied; a copy that takes too long is given up.
+const copyOf = async ($: EngineInterface, real: string): Promise<string | undefined> => {
+  const home = (await $.process.run(['bash', '-c', 'printf %s "$HOME"']).catch(() => undefined))?.stdout ?? ''
+  if (real === '' || real === '/' || real === home) return undefined
+  const made = await $.process.run(['mktemp', '-d', '-t', 'dss-verify']).catch(() => undefined)
+  const dir = made?.exitCode === 0 ? made.stdout.trim() : ''
+  if (dir === '') return undefined
+  // `-c` clones on APFS; elsewhere (Linux), a plain recursive copy.
+  const cloned = await $.process
+    .run(['bash', '-c', 'cp -cR "$0/." "$1" 2>/dev/null || cp -R "$0/." "$1"', real, dir], { timeoutMs: COPY_MS })
+    .catch(() => undefined)
+  if (cloned?.exitCode === 0) return dir
+  await drop($, dir)
+  return undefined
+}
+
+const drop = async ($: EngineInterface, dir: string) => {
+  // Only what mktemp made for this plugin.
+  if (/\/dss-verify\.[A-Za-z0-9]+$/.test(dir)) await $.process.run(['rm', '-rf', dir]).catch(() => undefined)
+}
+
+const addCost = (cost: VerifyResult['cost'], u: { cache_read_input_tokens?: number | null; input_tokens: number; output_tokens: number }) => {
+  cost.cached += u.cache_read_input_tokens ?? 0
+  cost.input += u.input_tokens
+  cost.output += u.output_tokens
+  cost.calls += 1
+}
+
+/**
+ * Checks claims by running commands. Open items that carry a recheck are
+ * settled by code first: exit 0 is fixed, whatever anyone says. Never rejects.
+ */
+const verify = async ($: EngineInterface, input: VerifyInput): Promise<VerifyResult> => {
+  const hasBox = (await $.process.run(['test', '-x', SANDBOX]).catch(() => undefined))?.exitCode === 0
+  const home = (await $.process.run(['bash', '-c', 'printf %s "$HOME"']).catch(() => undefined))?.stdout ?? ''
+  const copy = !hasBox || home === '' || input.cwd === '' ? undefined : await copyOf($, input.cwd).catch(() => undefined)
+  const mode: Mode = copy === undefined ? 'read-only' : 'copy'
+  const where = copy ?? input.cwd
+  // The sandbox matches resolved paths (/tmp is /private/tmp on macOS), so every
+  // path goes in both as given and resolved.
+  const both = async (p: string) => p === '' ? [] : [...new Set([p, (await $.process.run(['realpath', p]).catch(() => undefined))?.stdout.trim() || p])]
+  const box = !hasBox || home === '' ? undefined : boxOf([...(await both(home)), ...(await both(input.cwd))], copy === undefined ? [] : await both(copy))
+  const result: VerifyResult = { mode, probes: [], fixed: [], ran: [], cost: { cached: 0, input: 0, output: 0, calls: 0 } }
   try {
-    const before = await read($, ledger)
-    const ask: Ask = {
-      kind: pass.kind,
-      open: before.raised.filter(r => r.status === 'open'),
-      settled: before.raised.filter(r => r.status !== 'open'),
-      latest: pass.latest,
-    }
-
-    const all = await $.session.messages().catch((err: unknown) => {
-      say($, `transcript not readable, findings go unchecked (${err})`)
-      return null
-    })
-    const messages = all === null ? null : all.filter(m => !isOwn(m))
-    const haystack = messages === null ? null : `${haystackOf(messages)}\n${normalize(pass.latest)}`
-
-    const { result: reply, reviewer } = await review($, cfg, ask, messages)
-    const at = await $.clock.now()
-    if (!reply.isAnswered) {
-      say($, `no verdict (${reply.reason})`)
-      await remember($, { at, kind: pass.kind, reviewer, reason: reply.reason })
-      return
-    }
-
-    const verdict = parseVerdict(reply.text)
-    const { kept, dropped } = grounded(verdict?.findings ?? [], haystack)
-    // The prompt says not to repeat itself; this holds it to that.
-    const known = new Set(before.raised.map(r => `${r.category}|${normalize(r.quote)}`))
-    const fresh = kept.filter(f => !known.has(`${f.category}|${normalize(f.quote)}`))
-    const resolved = new Set(verdict?.resolved ?? [])
-
-    let ignored: Raised[] = []
-    const after = await update($, ledger, l => {
-      // An unreadable verdict says nothing of the open items either.
-      const aged = l.raised.map((r): Raised => {
-        if (r.status !== 'open' || verdict === null) return r
-        if (resolved.has(r.id)) return { ...r, status: 'resolved' }
-        const seen = r.seen + 1
-        return { ...r, seen, status: seen >= ESCALATE_AFTER ? 'escalated' : 'open' }
-      })
-      ignored = aged.filter(r => r.status === 'escalated' && l.raised.find(o => o.id === r.id)?.status === 'open')
-      const added = fresh.map((f, i): Raised => ({ ...f, id: `R${l.nextId + i}`, at, status: 'open', seen: 0 }))
-      return {
-        ...l,
-        passes: l.passes + 1,
-        told: l.told + fresh.length,
-        last: fresh.length === 0 ? l.last : `${fresh.length} at ${hhmm(at)}`,
-        nextId: l.nextId + fresh.length,
-        raised: [...aged, ...added].slice(-RAISED_KEPT),
+    // Rechecks run only in a copy: they are the project's own commands and may write.
+    if (mode === 'copy') {
+      for (const i of input.open.filter(i => (i.recheck ?? '') !== '')) {
+        // A recheck is the verifier's command too: kept to the copy like the rest.
+        const no = refusal(i.recheck ?? '', mode, input.cwd)
+        if (no !== undefined) {
+          result.ran.push({ command: i.recheck ?? '', exitCode: null, ms: 0, refused: no })
+          continue
+        }
+        const r = await runIn($, i.recheck ?? '', where, box)
+        result.ran.push({ command: i.recheck ?? '', exitCode: r.exitCode, ms: r.ms })
+        if (r.exitCode === 0) result.fixed.push({ id: i.id, saw: clip(squash(r.out), 300) || `\`${i.recheck}\` exited 0` })
       }
-    })
-
-    await remember($, {
-      at,
-      kind: pass.kind,
-      reviewer,
-      readable: verdict !== null,
-      findings: fresh,
-      ungrounded: dropped,
-      repeated: kept.length - fresh.length,
-      resolved: [...resolved],
-      ignored: ignored.map(r => r.id),
-      cost: costOf(reply.usage),
-    })
-    say($, `WATCH ${pass.kind} ${JSON.stringify({ fresh, dropped: dropped.length, resolved: [...resolved], ignored: ignored.map(r => r.id) })}`)
-    if (fresh.length === 0 && ignored.length === 0) return
-
-    await update($, ledger, l => ({ ...l, promptsSinceCards: 0 }))
-    await update($, cards, () => ({ at, items: fresh, ignored }))
-    await update($, isHidden, () => false)
-    if (ignored.length > 0)
-      $.ui.toast(`deepseek-supervisor: the model has not acted on ${ignored.length} earlier item(s); see above the prompt`)
-
-    // The turn ended on something that gives the person a wrong result: start a turn
-    // that settles it, at most max_wakes times per prompt from the person, and never
-    // over a prompt the person sent meanwhile.
-    const urgent = fresh.filter(f => f.severity === 'high')
-    if (pass.kind === 'final' && pass.canWake && urgent.length > 0 && after.wakes < cfg.maxWakes && epoch === promptEpoch) {
-      await update($, ledger, l => ({ ...l, wakes: l.wakes + 1 }))
-      const woke = await $.prompt
-        .submit({ text: wakeText([...fresh, ...ignored]) })
-        .then(r => r.drop === undefined)
-        .catch((err: unknown) => {
-          say($, `wake refused (${err})`)
-          return false
-        })
-      if (woke) return
     }
+    const toRecheck = input.open.filter(i => i.from === 'verify' && (mode !== 'copy' || (i.recheck ?? '') === ''))
+    if (input.claims.length === 0) return result
 
+    let transcript = verifyPrompt(input, mode, toRecheck)
+    for (let round = 1; round <= ROUNDS; round++) {
+      const final = round === ROUNDS
+      const reply = await $.model.complete({ model: MODEL, prompt: final ? `${transcript}\n\nNo more commands: answer with the "checked" object now.` : transcript, maxTokens: 16000, timeoutMs: 180_000 })
+      addCost(result.cost, reply.usage)
+      if (!reply.isAnswered) return { ...result, reason: reply.reason }
+      let turn = parseTurn(reply.text, input.claims)
+      // One second chance for a reply that is not one JSON object.
+      if (turn === null) {
+        const again = await $.model.complete({ model: MODEL, prompt: `${transcript}\n\n[your reply]\n${clip(reply.text, 2000)}\n\nThat was not one JSON object. Answer again with exactly one JSON object and nothing else.`, maxTokens: 16000, timeoutMs: 180_000 })
+        addCost(result.cost, again.usage)
+        turn = again.isAnswered ? parseTurn(again.text, input.claims) : null
+      }
+      if (turn === null) return { ...result, reason: 'unreadable reply' }
+      if ('checked' in turn) {
+        result.probes = turn.checked
+        for (const it of turn.items) if (it.status === 'fixed' && it.saw !== '' && toRecheck.some(i => i.id === it.id)) result.fixed.push({ id: it.id, saw: it.saw })
+        return result
+      }
+      if (final || turn.run.length === 0) return { ...result, reason: 'no verdict' }
+      const outputs: string[] = []
+      for (const command of turn.run) {
+        const no = refusal(command, mode, input.cwd)
+        if (no !== undefined) {
+          result.ran.push({ command, exitCode: null, ms: 0, refused: no })
+          outputs.push(`$ ${command}\n[refused: ${no}]`)
+          continue
+        }
+        const r = await runIn($, command, where, box)
+        result.ran.push({ command, exitCode: r.exitCode, ms: r.ms })
+        outputs.push(`$ ${command}\n[exit ${r.exitCode ?? 'none'}]\n${shown(r.out)}`)
+      }
+      transcript = `${transcript}\n\n[your turn ${round}]\n${reply.text.trim()}\n\n[output]\n${outputs.join('\n\n')}`
+    }
+    return { ...result, reason: 'no verdict' }
+  } catch (err) {
+    return { ...result, reason: `failed: ${String(err)}` }
+  } finally {
+    if (copy !== undefined) await drop($, copy)
+  }
+}
+
+const IMAGE_WORDS = /图|画面|截图|chart|plot|image|figure|picture|graph/i
+
+// A rule, not a model: an image made and never opened since, that the model has
+// just said something about (named it, or spoke of a chart while at most 3 sit unopened).
+const unopenedClaimed = (facts: Facts, claims: readonly string[]) =>
+  facts.unopened
+    .map(path => [path, claims.find(c => c.includes(base(path)) || (IMAGE_WORDS.test(c) && facts.unopened.length <= 3))] as const)
+    .filter((x): x is readonly [string, string] => x[1] !== undefined)
+
+// The model's own word that it told the person: `[ysk#3 told]`, `[ysk#3 refuted: …]`.
+const TAG = /\[ysk#(\d+)\s+(told|refuted)\b[^\]]*\]/g
+
+type Rows = { role: string; text: string; toolUses?: readonly { tool: string; input: unknown; text?: string; result?: unknown; isError?: true }[] }[]
+
+// One check: the rules on the session's record and on images, the rechecks of open
+// items, and the verifier on `claims`. Settles what it can and returns the new items; the caller delivers them.
+const check = async ($: EngineInterface, claims: readonly string[], list: Rows, kind: 'during' | 'answer'): Promise<Issue[]> => {
+  const at = await $.clock.now()
+  const before = await read($, track)
+  const facts = factsOf(list)
+  const open = before.issues.filter(i => i.status === 'open')
+  // During the work the verifier runs at most RUNS_PER_PROMPT checks per
+  // prompt; a turn's answer is always checked.
+  const canRun = kind === 'answer' || (before.runs ?? 0) < RUNS_PER_PROMPT
+  // The session's own record against the claims first: no model, so no budget and
+  // no made-up evidence, and it works where no command may run. Only what the record
+  // still contradicts now is raised: a claim since made good is left alone. A claim
+  // the record already contradicts is not handed to the verifier as well.
+  const record = evidenceOf(list)
+  const contradicted = contradictions(record, claims).filter(f => settledBy(record, f.kind, f.probe) === undefined)
+  const handed = canRun ? claims.filter(c => !contradicted.some(f => f.quote === c)) : []
+  const rechecks = open.some(i => (i.recheck ?? '') !== '')
+  const stillUnopened = new Set(facts.unopened)
+  const images = unopenedClaimed(facts, claims)
+  let v: VerifyResult | undefined
+  if (handed.length > 0 || rechecks) {
+    $.ui.status('deepseek-supervisor checking what the model said…')
+    const fallback = list.find(r => r.role === 'user' && r.text.trim() !== '' && !r.text.includes('[deepseek-supervisor]'))?.text ?? ''
+    v = await verify($, { claims: handed, asked: asked !== '' ? asked : fallback, facts, open, cwd: await $.session.cwd().catch(() => '') })
+  }
+  const done = await $.clock.now()
+  let found: Issue[] = []
+  await update($, track, t => {
+    let issues = t.issues.map(i => {
+      const f = v?.fixed.find(x => x.id === i.id)
+      if (i.status !== 'open') return i
+      if (f !== undefined) return { ...i, status: 'fixed' as const, settledAt: done, why: f.saw }
+      if (i.rule !== undefined) {
+        const why = settledBy(record, i.rule, i.probe)
+        return why === undefined ? i : { ...i, status: 'fixed' as const, settledAt: done, why }
+      }
+      if (i.from === 'rule' && i.probe.startsWith('Read ') && !stillUnopened.has(i.probe.slice(5))) return { ...i, status: 'fixed' as const, settledAt: done, why: `${base(i.probe.slice(5))} was opened with Read` }
+      return i
+    })
+    const fresh: Issue[] = []
+    // One open item per question: whether the checks pass is one, each untouched file another.
+    const isTestRule = (r: Issue['rule']) => r === 'failed-check' || r === 'stale-check' || r === 'no-check'
+    for (const f of contradicted) {
+      const all = [...issues, ...fresh]
+      if (all.some(i => i.status === 'open' && (isTestRule(f.kind) ? isTestRule(i.rule) : i.probe === f.probe))) continue
+      if (all.some(i => isSameItem({ quote: f.quote }, i))) continue
+      fresh.push({ id: t.nextId + fresh.length, at: done, from: 'rule', rule: f.kind, what: f.what, quote: f.quote, probe: f.probe, ...(f.recheck === '' ? {} : { recheck: f.recheck }), cost: 'the person will rely on work that was never shown to hold', status: 'open' })
+    }
+    for (const p of (v?.probes ?? []).filter(p => p.verdict === 'false')) {
+      if ([...issues, ...fresh].some(i => isSameItem({ quote: p.claim }, i))) continue
+      fresh.push({ id: t.nextId + fresh.length, at: done, from: 'verify', what: p.what, quote: p.claim, probe: p.command, saw: p.saw, recheck: p.recheck, cost: 'the person will act on a claim the output contradicts', status: 'open' })
+    }
+    for (const [path, claim] of images) {
+      if ([...issues, ...fresh].some(i => i.probe === `Read ${path}`)) continue
+      fresh.push({ id: t.nextId + fresh.length, at: done, from: 'rule', what: `${base(path)} was made and never opened since, yet the model has stated something about it`, quote: claim, probe: `Read ${path}`, cost: 'what the picture shows is asserted, not seen', status: 'open' })
+    }
+    found = fresh
+    issues = [...issues, ...fresh].slice(-ISSUES_KEPT)
+    const ran = v !== undefined && v.cost.calls > 0 && kind === 'during'
+    return { ...t, nextId: t.nextId + fresh.length, issues, seen: [...(t.seen ?? []), ...handed].slice(-SEEN_KEPT), runs: (t.runs ?? 0) + (ran ? 1 : 0) }
+  })
+  if (v !== undefined || found.length > 0)
+    await remember($, {
+      at: done,
+      kind,
+      mode: v?.mode ?? null,
+      claims: handed.length,
+      probes: (v?.probes ?? []).map(p => ({ claim: p.claim, command: p.command, verdict: p.verdict, saw: p.saw })),
+      fixed: (v?.fixed ?? []).map(f => f.id),
+      found: found.map(i => i.id),
+      rules: found.filter(i => i.rule !== undefined).map(i => ({ id: i.id, rule: i.rule, quote: i.quote })),
+      ran: v?.ran ?? [],
+      reason: v?.reason ?? null,
+      cost: v?.cost ?? { cached: 0, input: 0, output: 0, calls: 0 },
+      ms: done - at,
+    })
+  say($, `CHECK ${JSON.stringify({ kind, claims: handed.length, found: found.map(i => i.id), rules: found.filter(i => i.rule !== undefined).map(i => `${i.id}:${i.rule}`), fixed: v?.fixed.map(f => f.id) ?? [], reason: v?.reason })}`)
+  return found
+}
+
+const newClaims = (texts: readonly string[], seen: readonly string[]) => {
+  const known = new Set(seen)
+  return [...new Set(texts.flatMap(claimsOf))].filter(c => !known.has(c)).slice(-CLAIMS_PER_RUN)
+}
+
+const showCards = async ($: EngineInterface, items: readonly Issue[]) => {
+  const at = await $.clock.now()
+  told += items.length
+  last = `${items.length} at ${hhmm(at)}`
+  promptsSinceCards = 0
+  await update($, cards, () => ({ at, items: items.map(i => ({ what: `#${i.id} ${i.what}`, evidence: i.from === 'verify' ? `${i.probe} → ${i.saw ?? ''}` : i.quote, cost: i.cost })) }))
+  await update($, isHidden, () => false)
+}
+
+// During the work: every MIN_GAP finished steps, the model's new claims.
+const tick = async ($: EngineInterface) => {
+  try {
+    if (steps < MIN_GAP) return
+    steps = 0
+    const rows = await $.session.messages().catch(() => undefined)
+    const list = (Array.isArray(rows) ? rows : []) as Rows
+    // Only messages no earlier check read: an old claim pushed out of `seen` is not
+    // handed over again. A list shorter than before was compacted: read it all, and
+    // let `seen` hold back what was already checked.
+    const before = await read($, track)
+    const from = (before.scanned ?? 0) <= list.length ? (before.scanned ?? 0) : 0
+    const claims = newClaims(
+      list.slice(from).filter(r => r.role === 'assistant').map(r => r.text),
+      before.seen ?? [],
+    )
+    const found = await check($, claims, list, 'during')
+    await update($, track, t => ({ ...t, scanned: list.length }))
+    if (found.length === 0) return
+    await showCards($, found)
     // Refused or failed, the items are still in the band: say so, so the person can pass them on.
     const note = await $.session
-      .append({ message: { type: 'user', content: [{ type: 'text', text: noteText(fresh, ignored) }] } })
+      .append({ message: { type: 'user', content: [{ type: 'text', text: noteText(found) }] } })
       .catch((err: unknown) => ({ deny: String(err) }))
     if (note.deny !== undefined) {
       say($, `note not delivered (${note.deny})`)
       $.ui.toast('deepseek-supervisor: a note did not reach the model; see the band above the prompt')
     }
   } catch (err) {
-    say($, `watch failed: ${err}`)
+    say($, `check failed: ${err}`)
   } finally {
-    isWatching = false
-    await show($, cfg).catch(() => undefined)
-    // A turn ended while this pass was out: look at its answer now.
-    if (pendingFinal !== null) {
-      const latest = pendingFinal
-      pendingFinal = null
-      if ((await read($, ledger).catch(() => EMPTY)).steps > 0) start($, cfg, { kind: 'final', latest, canWake: true })
-    }
+    isBusy = false
+    await show($)
   }
 }
 
-// Off the dispatch that asked for it, which closes when that hook returns: work that
-// must outlive it runs from a timer (started straight from the hook, the pass
-// stalled after the fork).
-const start = ($: EngineInterface, cfg: Config, pass: PassOptions) => {
-  isWatching = true
-  $.clock.after(0, async () => {
-    await update($, ledger, l => ({ ...l, steps: 0 })).catch(() => undefined)
-    await show($, cfg).catch(() => undefined)
-    await watch($, cfg, pass)
-  })
+// When a turn ends: the answer's own claims, which no later step would check. What
+// does not hold goes back to the model as one follow-up prompt, at most one per
+// prompt of the person's.
+const atAnswer = async ($: EngineInterface, answer: string) => {
+  try {
+    const at = await $.clock.now()
+    // The model telling the person settles an item: it is then theirs to weigh.
+    const tags = [...answer.matchAll(TAG)]
+    if (tags.length > 0)
+      await update($, track, t => ({
+        ...t,
+        issues: t.issues.map(i => {
+          const m = tags.find(x => Number(x[1]) === i.id)
+          return m === undefined || i.status !== 'open' ? i : { ...i, status: m[2] === 'refuted' ? ('refuted' as const) : ('told' as const), settledAt: at, why: m[0] }
+        }),
+      }))
+    const claims = newClaims([answer], (await read($, track)).seen ?? [])
+    if (claims.length === 0) return
+    const rows = await $.session.messages().catch(() => undefined)
+    const found = await check($, claims, (Array.isArray(rows) ? rows : []) as Rows, 'answer')
+    if (found.length === 0) return
+    await showCards($, found)
+    if (followUps >= FOLLOW_UPS_PER_PROMPT) return
+    followUps += 1
+    // The submit waits for the session to go idle; never await it inside the turn's end.
+    await $.prompt.submit({ text: noteText(found) }).catch(err => say($, `follow-up not submitted: ${err}`))
+  } catch (err) {
+    say($, `answer check failed: ${err}`)
+  } finally {
+    await show($)
+  }
 }
 
-const isPerson = (kind: string) => kind === 'composer' || kind === 'bridge' || kind === 'sdk'
-
-export const register: Register = (on, options) => {
-  const cfg = configOf(options)
+export const register: Register = on => {
   registerBand(on)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await $.command
-      .register({
-        name: 'deepseek-supervisor',
-        description: 'Reviews the session at work and tells the model what it notices: on, off, auto, now, status, or log',
-        argumentHint: '[on|off|auto|now|status|log]',
-      })
+      .register({ name: 'deepseek-supervisor', description: 'Checks what the model claims by running it: on, off, auto, log, or issues', argumentHint: '[on|off|auto|log|issues]' })
       .catch(err => say($, `command not registered: ${err}`))
-    await show($, cfg)
+    await show($)
     return result
   })
 
-  // The person's prompts age the band, as they age "You should know" cards, and
-  // give the watcher back its wakes.
+  // The person's prompts: what claims are checked against, a fresh budget, and the
+  // band aging as "You should know" cards do.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
-    if (result.drop === undefined && isPerson(e.origin.kind)) {
-      promptEpoch += 1
-      const l = await update($, ledger, l => ({ ...l, promptsSinceCards: l.promptsSinceCards + 1, wakes: 0 }))
-      if (l.promptsSinceCards >= CLEAR_AFTER_PROMPTS) await update($, cards, () => null)
+    // The person's own: typed, from a phone, or the SDK host's turn (`claude -p`).
+    if (result.drop === undefined && (e.origin.kind === 'composer' || e.origin.kind === 'bridge' || e.origin.kind === 'sdk')) {
+      asked = e.text
+      followUps = 0
+      await update($, track, t => ({ ...t, runs: 0 })).catch(() => undefined)
+      promptsSinceCards += 1
+      if (promptsSinceCards >= CLEAR_AFTER_PROMPTS) await update($, cards, () => null).catch(() => undefined)
     }
     return result
   }).catch(($, e, next) => next(e))
 
-  // The watcher counts the main loop's finished steps; a subagent's are its own.
+  // The main loop's finished steps; a subagent's are its own.
   on('turn.step', async function* ($, e, next) {
     const result = yield* next(e)
-    if (e.agentId !== undefined || result.stopReason === null || !(await isOn($))) return result
-    const l = await update($, ledger, l => ({ ...l, steps: l.steps + 1 }))
-    // The step that ends the turn is the end-of-turn pass's to look at.
-    const endsTurn = result.stopReason === 'end_turn' && cfg.turnEnd
-    if (l.steps >= cfg.every && !isWatching && !endsTurn) start($, cfg, { kind: 'step', latest: latestOfStep(result), canWake: false })
+    if (e.agentId !== undefined || result.stopReason === null) return result
+    steps += 1
+    if (!isBusy && steps >= MIN_GAP && (await isOn($))) {
+      isBusy = true
+      // Off the step's own dispatch, which closes when the step ends: work that
+      // must outlive it runs from a timer.
+      $.clock.after(0, () => {
+        void tick($)
+      })
+    }
     return result
   })
 
-  // Where the turn ends, the assistant tells the person what it did: the claims
-  // worth checking are there.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (!cfg.turnEnd || e.agentId !== undefined || e.reason !== 'answer' || !(await isOn($))) return result
-    if ((await read($, ledger)).steps === 0) return result
-    if (isWatching) pendingFinal = clip(e.answer, 4000)
-    else start($, cfg, { kind: 'final', latest: clip(e.answer, 4000), canWake: true })
+    // Only a turn the model finished on its own: one the person interrupted says nothing.
+    if (e.agentId !== undefined || e.reason !== 'answer' || !(await isOn($))) return result
+    const answer = e.answer
+    $.clock.after(0, () => {
+      void atAnswer($, answer)
+    })
     return result
   })
 
@@ -357,27 +466,23 @@ export const register: Register = (on, options) => {
       const list = await $.store.get('history').catch(() => [])
       return { text: Array.isArray(list) && list.length > 0 ? JSON.stringify(list.slice(-10), null, 1) : 'No checks yet.' }
     }
-    if (arg === 'status') {
-      const l = await read($, ledger)
-      const lines = l.raised
-        .filter(r => r.status !== 'resolved')
-        .map(r => `${r.id} [${r.status === 'escalated' ? 'IGNORED' : 'open'} · ${r.severity} · ${r.category}] ${r.what}`)
-      return { text: `${l.passes} pass(es), ${l.told} item(s) noted.` + (lines.length === 0 ? ' Nothing open.' : `\n${lines.join('\n')}`) }
-    }
-    if (arg === 'now') {
-      if (isWatching) return { text: 'A pass is already under way.' }
-      // The person is at the prompt: the pass notes, and does not start a turn.
-      start($, cfg, { kind: 'final', latest: '', canWake: false })
-      return { text: 'deepseek-supervisor: a pass is under way; its items will show above the prompt.' }
+    if (arg === 'issues') {
+      const t = await read($, track)
+      return {
+        text:
+          t.issues.length === 0
+            ? 'No items this session.'
+            : t.issues.map(i => `#${i.id} [${i.status}] ${i.what}${i.from === 'verify' ? `\n   ran: ${i.probe}\n   saw: ${i.saw ?? ''}` : ''}${i.why === undefined ? '' : `\n   why: ${i.why}`}`).join('\n'),
+      }
     }
     if (arg === 'on' || arg === 'off' || arg === 'auto') {
       if (arg === 'auto') await $.store.delete('mode')
       else await $.store.set('mode', arg)
       if (!(await isOn($))) await update($, cards, () => null)
-      await show($, cfg)
-      return { text: `deepseek-supervisor is ${arg}${arg === 'auto' ? ` (${(await isOn($)) ? 'watching' : 'idle on Anthropic\'s endpoint'})` : ''}.` }
+      await show($)
+      return { text: `deepseek-supervisor is ${arg}${arg === 'auto' ? ` (${(await isOn($)) ? 'checking' : "idle on Anthropic's endpoint"})` : ''}.` }
     }
-    const mode = await modeOf($)
-    return { text: `deepseek-supervisor is ${mode}${mode === 'auto' ? ` (${(await isOn($)) ? 'watching' : 'idle on Anthropic\'s endpoint'})` : ''}. Usage: /deepseek-supervisor [on|off|auto|now|status|log]` }
+    const setting = await settingOf($)
+    return { text: `deepseek-supervisor is ${setting}${setting === 'auto' ? ` (${(await isOn($)) ? 'checking' : "idle on Anthropic's endpoint"})` : ''}. Usage: /deepseek-supervisor [on|off|auto|log|issues]` }
   })
 }

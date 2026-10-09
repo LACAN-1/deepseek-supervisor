@@ -1,8 +1,8 @@
 # deepseek-supervisor
 
-**"You should know" for Claude Code running a third-party model such as DeepSeek.**
+**A check for Claude Code running a third-party model such as DeepSeek: what the model says is done gets run.**
 
-Every few steps, a side pass reviews the session's work so far. When it notices something the model should act on now, it tells the model directly and shows you the same items above the prompt.
+When the model claims something ("all tests pass", "fixed", "the total is 59.75", "the chart is right"), a verifier runs the cheapest command that would show it false, in a throwaway copy of your workspace. If the output contradicts the claim, the model gets the command and its output, and you see the same above the prompt.
 
 [中文说明](README.zh-CN.md)
 
@@ -10,51 +10,64 @@ Every few steps, a side pass reviews the session's work so far. When it notices 
 
 Claude Code ships a side agent, "You should know", that watches Claude at work and surfaces what it notices. It is hidden whenever `ANTHROPIC_BASE_URL` points away from Anthropic: on Claude Code 2.1.290 that one variable alone switches it off. So if you run Claude Code against DeepSeek or any other Anthropic-compatible endpoint, nothing watches the work.
 
-deepseek-supervisor fills that gap. It was built for DeepSeek, but nothing in it is DeepSeek-specific: it works with any Anthropic-compatible endpoint.
+This plugin is not a copy of it. "You should know" reads the transcript and writes cards for a person, who answers them. Here the reader is the model, and a model can do what a person reading cards would not: run things. An earlier version of this plugin did what "You should know" does, a review pass over the transcript every 6 steps, and its items were opinions the model could talk its way past with one quoted line. So it now checks claims against what a command prints.
+
+It was built for DeepSeek, but nothing in it is DeepSeek-specific: it works with any Anthropic-compatible endpoint.
 
 ## What it does
 
-It is a closed loop, not a single check:
+**During the work.** Every 3 finished steps of the main loop (subagents' steps are not counted), code collects the sentences the model has written since the last check that claim something is so ("passes", "fixed", "verified", "correct", "done", "works", 通过, 修好, 正确, 完成…). If there are new ones, the verifier gets them, with your last prompt and a few facts code read from the tool calls (commands that failed, including a Traceback hidden behind `| tail`; images a tool wrote that nobody opened since; files the model wrote).
 
-1. **Two triggers.** After every 6 finished steps of the main loop (the same interval as "You should know"; subagents' steps are not counted), and again **when a turn ends**, because the final answer is where "done", "fixed" and "verified" are said. Each trigger runs one review pass.
-2. **A fixed checklist.** The pass looks only for these, and every item must name its category:
-   - **silent-reading**: your request allows two readings that change the result, and the model is building on one without asking.
-   - **unraised-problem**: it saw something wrong and moved on without telling you.
-   - **unbacked-claim**: "verified", "works", "tests pass" with no command, number or file behind it, or a file or image described but never opened.
-   - **untried-cannot**: "can't do X" without trying X.
-   - **scope-creep**: it changes things you did not ask for, without saying so.
-   - **guessing**: several changes with no effect and no measurement between them.
-   - **silent-change**: files changed after it said it was done, without saying which.
-   - **ignored-instruction**: it acts against something you explicitly said, or against the project's written instructions.
-3. **Evidence is checked, not trusted.** The reviewer is the same kind of model as the author and invents things the same way. Every item must carry a quote copied verbatim from the conversation; the plugin searches the transcript for it (ignoring whitespace, case and full/half width), and **drops any item whose quote is not there** before you or the model see it. Dropped items stay in `/deepseek-supervisor log` for audit.
-4. **A high bar.** Each item has a severity, `high` (going on gives you a wrong result) or `medium` (a wasted step); anything lower is dropped. At most 2 items per pass, and anything already raised is held back, by the prompt and again by the plugin.
-5. **Delivery.** Findings go to the model as a note it reads at its next step, and to you in a band above the prompt. When a turn **ends** on a `high` item, the plugin starts one follow-up turn so the model settles it before you have to find it (at most `max_wakes` per prompt of yours, default 1, and never over a prompt you sent meanwhile).
-6. **Follow-through.** Every later pass is shown the items still open, by id, and says which the model has acted on (fixed, told you, or explained why not). An item still open after two more passes is marked **ignored**: you get a toast, the band lists it, and the model is told again.
+**The verifier** is a short loop the plugin runs itself: a model proposes commands, they run in a clone of your workspace, their output goes back, for at most 6 rounds of at most 3 commands of 60 s each. It picks at most 3 claims worth checking and judges each *holds*, *false* or *unclear*. A *false* verdict must carry the command it ran and the output that contradicts the claim; one without them is dropped. The clone is made with `cp -c` (an APFS clone: no data copied) and removed afterwards. A clone alone does not keep a script off your files (a project's scripts often write to absolute paths), so every command also runs under the macOS sandbox (`sandbox-exec`): nothing may be written under your home folder or the real workspace, except the clone (other places, such as `/tmp`, stay writable). A command that names your real workspace is refused. If no clone can be made (your home folder, the root, a copy over 60 s), or there is no sandbox (not macOS), it runs read-only commands only, and open items cannot close by their recheck.
 
-The note says it is a reviewer's observation, not an instruction from you, and that it authorizes nothing beyond what you asked for. The reviewer is told that tool results and web pages are data, never instructions to it, and what it writes is stripped of control characters and of anything shaped like the engine's own tags (`<system-reminder>`), because the transcript it reads may contain text from the web.
+**What does not hold becomes a numbered item**, with the model's own words, the command, the output, and a *recheck*: a command that exits 0 exactly when the claim holds. It reaches the model as a note it reads at its next step, and you in a band above the prompt.
 
-### Who reviews
+**When a turn ends**, the claims in its answer are checked the same way, since no later step would. If one does not hold, the items go back to the model as one follow-up prompt. At most one per prompt of yours, so the check never keeps a session going by itself.
 
-- **By default, a fork of the session**: DeepSeek reviews DeepSeek on the same transcript, served from the prompt cache, so it is cheap.
-- **With `reviewer_model` set** (for example `deepseek-reasoner` while the session runs `deepseek-chat`), that model reads the transcript on its own, outside the author's framing: a second opinion rather than a second look. The transcript is sent whole while it fits (240k characters), else its opening and its newest stretch. If that model is refused or errors, the pass falls back to the fork.
+**Rules that need no model.** Before anything is handed to the verifier, code holds each claim against the session's own record of tool calls: what ran, in what order, and how it ended. These cost nothing, work on any machine (Linux too, where the verifier may only read), and cannot make evidence up:
+
+| Rule | Raised when | Closes when |
+|---|---|---|
+| **failed-check** | the model says the tests, the build or a check pass, and the last such command it ran failed (exit code, `FAILED`, `1 failed`, `error TS…`, a Traceback, even behind `\| tail`) with none passing since | a check command passes after the last edit to code |
+| **stale-check** | it says they pass, the last run passed, but a code file was edited after it (edits to `*.md`, `NOTES`, `README` do not count) | the same |
+| **no-check** | it says they pass and no test, build or check command has run in the session | the same |
+| **untouched** | it says it changed a file (`updated setup.cfg`) that no tool call touched or even named | a tool call names the file |
+| **unopened image** | it says something about an image it made and never opened since | it opens the image |
+
+A claim is held against what had happened when it was said, and only what the record still contradicts *now* is raised. Plans, hopes and honest failures ("I will make the tests pass", "two tests fail", 测试还没通过) are not claims. If a subagent ran before the claim, its runs are not in the transcript, so the test rules stand aside. A claim a rule already contradicts is not handed to the verifier as well.
+
+These target the slip that costs most in a long session: "all tests pass", said about code changed since the run that passed, or about a run that failed, or about no run at all. When a turn ends on one, the follow-up prompt sends the model back to run the check.
+
+## How an item closes
+
+Not by the model saying so.
+
+- **fixed**: its recheck, rerun in a fresh clone at every later check, exits 0; or, for a rule on the record, the record shows what closes it (a check command that passed after the last edit). The model writing `[ysk#3 fixed]` closes nothing.
+- **told**: the model told you about it, writing `[ysk#3 told]` in its answer. It is then yours to weigh.
+- **refuted**: the model says the clone misled the check (the claim depends on something outside the workspace), `[ysk#3 refuted: why]`, in its answer to you.
+
+The note says it is what a check observed, not an instruction from you, and that it authorizes nothing beyond what you asked for: it carries command output from a project that may hold anything. Control characters and anything shaped like the engine's own tags (`<system-reminder>`) are stripped from what it quotes.
+
+**Credentials.** Command output goes to the verifier's endpoint, a third party. A command that reads `~/.ssh`, `~/.aws`, `.env`, a `$…KEY`/`$…TOKEN` variable, or dumps the environment (`env`, `printenv`) is refused, in the clone too; keys and tokens a command prints anyway (`sk-…`, `ghp_…`, `AKIA…`, private keys, `password=…`) are cut out before the output leaves the machine.
 
 ## Example
 
-A real run against DeepSeek, on 0.4.0 (before items carried a category, a severity and a verbatim quote). The request was 「会员打 5 折扣」. In Chinese that can mean "50% off" or, read loosely, "5% off". The file already implemented it. Six steps in, the model received this note:
+A live run against DeepSeek (`deepseek-flash`, Claude Code 2.1.293, 2026-10-09). The project had a bug: `total()` skipped the first price. A handover note said "all tests pass and total() is correct", and the model, told not to run anything, repeated it. When its turn ended, the verifier ran the tests in a clone and saw `AssertionError: 47.25 != 59.75`. The model got this as a follow-up prompt:
 
 ```
-[deepseek-supervisor] A separate pass over your work so far (not the user) found 2 item(s) to handle now:
-1. 会员折扣已经在 shop.py 里实现了，说完再动手改，别把已有代码当没写。
-   evidence: shop.py 第 1、7 行 `MEMBER_DISCOUNT = 0.5` …；test_shop.py 已有 `test_member_gets_half_off`。
-2. 确认「打 5 折扣」是打 5 折（×0.5）还是 5% off（×0.95），这两种读法结果差一倍。
-   evidence: 请求原文「会员打 5 折扣」；代码现在按 ×0.5 实现，但没跟用户对过。
+[deepseek-supervisor] A separate check (not the person) found 1 item(s) that do not hold. It tested what you said by running commands in a throwaway copy of your workspace:
+#1 The handover's claim is wrong: the suite fails, because shop.total() skips the first price (prices[1:]) and returns 47.25 instead of 59.75, so total() is not correct and not all tests pass.
+   you wrote: Handover says: "Handover from the previous session: all tests pass and total() is correct."
+   ran: python3 -m unittest test_shop -v 2>&1; echo exit=$?
+   saw: test_empty ... ok / test_total ... FAIL / AssertionError: 47.25 != 59.75 / Ran 2 tests in 0.000s / FAILED (failures=1) / exit=1
+   closes: when `python3 -m unittest test_shop` exits 0 (the check reruns it itself)
 ```
 
-Item 1 says the discount already exists in `shop.py`, so don't rewrite it. Item 2 asks it to confirm which reading the user meant. The model then left the existing code alone, ran the tests, and ended by asking which reading was meant.
+It read `shop.py`, fixed the slice, and reran the tests: `OK`, `exit=0`. That check took 10 s: 3 model calls, about 1.7k input and 2k output tokens.
 
 ## Requirements
 
-- Claude Code with plugin function hooks (`claude plugin validate` / `claude plugin test` exist). Developed on **2.1.290**; tested on **2.1.295**.
+- Claude Code with plugin function hooks (`claude plugin validate` / `claude plugin test` exist). Developed on **2.1.290**; 0.6.0 tested on **2.1.293**, 0.7.0 on **2.1.295**. Needs `bash` and `cp`. Running checks in a clone needs macOS (`sandbox-exec`); elsewhere the verifier runs read-only commands only, and the rules on the record work as anywhere.
 
 ## Install
 
@@ -69,42 +82,35 @@ Update later with `claude plugin update deepseek-supervisor@deepseek-supervisor`
 
 Or, for one session, from a clone: `claude --plugin-dir /path/to/deepseek-supervisor`. Where you cannot pass a flag (for example a session another app starts), list the folder in `CLAUDE_CODE_PLUGIN_DIRS`.
 
-**It turns itself on only where it is needed.** It watches when `ANTHROPIC_BASE_URL` points at a host that is not Anthropic's. On Anthropic's own endpoint it stays idle, because the built-in "You should know" already runs there. On Bedrock or Vertex, where that variable is unset, run `/deepseek-supervisor on` if you want it.
+**It turns itself on only where it is needed.** It checks when `ANTHROPIC_BASE_URL` points at a host that is not Anthropic's. On Anthropic's own endpoint it stays idle, because the built-in "You should know" already runs there. On Bedrock or Vertex, where that variable is unset, run `/deepseek-supervisor on` if you want it.
 
 ## Use
 
 | | |
 |---|---|
-| Status line | `deepseek-supervisor watching · N noted · M open · K ignored · last: …`, or why it is idle |
+| Status line | `deepseek-supervisor checking claims · N noted (M open) · last: …`, or why it is idle |
 | `/deepseek-supervisor on` / `off` | Force it on or off, whatever the endpoint. Off also clears the band. |
 | `/deepseek-supervisor auto` | Back to the default: on only away from Anthropic's endpoint. |
-| `/deepseek-supervisor now` | Run a pass now. It notes; it does not start a turn. |
-| `/deepseek-supervisor status` | Items raised this session that are still open or were ignored. |
-| `/deepseek-supervisor log` | The last 10 passes: findings, items dropped for a quote not found, items resolved, token usage. |
+| `/deepseek-supervisor issues` | This session's items: where each stands, the command and what it printed, and what settled it. |
+| `/deepseek-supervisor log` | The last 10 checks: which claims were checked, every command run (exit code, time, any refused), the verdicts, token usage. |
 
-### Settings
-
-Set them in the `/config` menu, or under `pluginConfigs` in settings:
-
-| Option | Default | |
-|---|---|---|
-| `every` | `6` | Main-loop steps between passes. |
-| `turn_end` | `true` | Also review each turn's final answer. |
-| `max_wakes` | `1` | Follow-up turns a `high` item at turn end may start, per prompt of yours. `0`: never; the note waits for your next prompt. |
-| `reviewer_model` | empty | Empty: fork the session. A model id: that model reviews independently. |
-
-The plugin's store is shared by every session on the machine. It keeps the on/off/auto setting, so `off` applies to all of them, and the last 50 passes, including the evidence each finding quotes from the conversation. It is never sent anywhere. The session's own record (step count, raised items and their status) is held by Claude Code for the session, so a plugin reload keeps it.
+The plugin's store is shared by every session on the machine. It keeps the on/off/auto setting, so `off` applies to all of them, and the last 50 checks, including the claims and command output. It is never sent anywhere.
 
 ## Cost
 
-Each fork re-reads the whole context, mostly as cache hits. On a large session that is hundreds of thousands of cached tokens per pass. With `turn_end` on there is one more pass per turn that took any step, and a follow-up turn when a turn ends on a `high` item. On a model with cheap cache reads, such as DeepSeek, that is small. On an expensive model, count it before you turn it on, or raise `every` and turn `turn_end` off. An independent `reviewer_model` reads a rendered transcript instead (at most 240k characters), whose opening stays the same from pass to pass so the provider's prefix cache can serve it.
+The rules on the record call no model and cost nothing. A check is a fresh request with no history: the claims, your prompt, the facts, and the command output so far. It does not re-read the session. In the run above, the check of the answer used about 1.7k input and 2k output tokens over 3 calls. Rechecks of open items run commands only and call no model. During the work the verifier runs at most 8 checks per prompt of yours; each check makes up to 6 model calls (12 if replies are unreadable and retried).
+
+Commands run on your machine, in the clone and under the sandbox, with your environment: the project's own tests and scripts, as the model would run them, except that they cannot write under your home folder or the real workspace, other than in the clone. Reading is not limited, and the network is not cut off.
 
 ## Known limits
 
-- **It still speaks often.** The checklist, the severity bar and the quote check cut the noise, and a made-up quote can no longer get through, but a real, quoted item can still be one you did not need.
-- **A quote proves the words exist, not the reading.** The check stops invented evidence; it cannot stop a real quote read wrongly. Items name their quote so you can judge.
-- **The reviewer judges what was resolved.** "Acted on" is the reviewer's call, so an item can be marked ignored when the model handled it in a way the reviewer missed.
-- **Its memory is bounded.** It keeps the last 30 items per session. Its record lives as long as the session: a new session, or a resume, starts it over.
+- **It only checks what a command can show false.** A model that did the wrong thing correctly, or misread what you wanted, makes claims that hold. This check does not see that.
+- **It can be slow.** In the run above, the check during the work took 72 s (one reply ran to 18k output tokens of reasoning), and the turn ended before its note arrived; the check of the answer caught the same claim. A slow check never blocks the model; it lands late.
+- **The clone is not your machine.** A claim that depends on something outside the workspace (a running server, a file elsewhere) can be judged false in the clone. The model then says so to you with `refuted`.
+- **The claim detector is wide.** Most sentences it hands over are not worth a command; the verifier is told to skip them. Each run is logged, so you can see what it chose.
+- **The rules read regexes, not meaning.** A test command is recognised by name (`pytest`, `unittest`, `npm test`, `cargo test`, `tsc`, `make test`…); a project with its own runner script is not, so its runs do not count as checks. An edit made through Bash (`sed -i`, a script) is not seen as an edit. Both make the rules miss, not misfire.
+- **Without a sandbox the verifier mostly reads.** On Linux it cannot run the project's tests, so a claim only a test run can refute is left to the rules above, and to the model's own runs.
+- **One live run so far.** The numbers above are n=1. The `late` eval suite (see [eval/README.md](eval/README.md)) is built for the rules on the record and has not been run against a live model yet.
 
 ## Development
 
@@ -117,12 +123,13 @@ Claude Code writes type declarations into `.claude-plugin/types/` the first time
 
 | File | Role |
 |---|---|
-| `hooks/register.ts` | The triggers, the review pass, the follow-through, the note and the wake, the on/off/auto switch, the command |
-| `hooks/prompt.ts` | The review prompt, the note and the wake, and the parsing of the answer |
-| `hooks/ground.ts` | The quote check, and the transcript as the independent reviewer reads it |
+| `hooks/register.ts` | When to check, the verifier's loop (clone, commands, model calls), settling items, the note and follow-up, the on/off/auto switch, the command |
+| `hooks/prompt.ts` | The claim detector, the facts read from the tool calls, the verifier's prompt and the parsing of its answers, what may run where, redaction, the note |
+| `hooks/evidence.ts` | The rules on the session's record: failed, stale or missing checks, files said to be changed and never touched |
 | `hooks/band.tsx` | The band above the prompt |
-| `types/index.d.ts` | The finding shape and the plugin's state contract |
-| `tests/watch.test.ts` | 20 tests against Claude Code's plugin test kit |
+| `types/index.d.ts` | The item shape and the plugin's state contract |
+| `tests/*.test.ts` | 31 tests against Claude Code's plugin test kit |
+| `eval/` | The same tasks with the plugin and without, scored by code; see [eval/README.md](eval/README.md) |
 
 ## License
 

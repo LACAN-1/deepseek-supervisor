@@ -1,42 +1,16 @@
 {
   "name": "deepseek-supervisor",
-  "version": "0.5.0",
-  "description": "\"You should know\" for Claude Code on a third-party model such as DeepSeek: every few steps a side pass reviews the work and tells the model, and the person, what it notices",
+  "version": "0.7.0",
+  "description": "A check for Claude Code on a third-party model such as DeepSeek: when the model claims something is done, passing or right, a verifier runs the cheapest command that would show it false in a throwaway copy of the workspace, and hands the model the output",
   "author": {
     "name": "LACAN-1"
   },
   "license": "MIT",
   "types": "./types/index.d.ts",
-  "userConfig": {
-    "every": {
-      "type": "number",
-      "title": "Steps between passes",
-      "description": "Main-loop steps between two review passes (the built-in \"You should know\" uses 6).",
-      "default": 6
-    },
-    "turn_end": {
-      "type": "boolean",
-      "title": "Review at turn end",
-      "description": "Also review each turn's final answer, where \"done\" and \"verified\" are said.",
-      "default": true
-    },
-    "max_wakes": {
-      "type": "number",
-      "title": "Follow-up turns per prompt",
-      "description": "How many times per prompt of yours a high-severity finding at the end of a turn may start a turn that settles it (0: never; the note waits for your next prompt).",
-      "default": 1
-    },
-    "reviewer_model": {
-      "type": "string",
-      "title": "Reviewer model",
-      "description": "Empty: the review forks the session on its own model, served from its prompt cache. A model id (such as deepseek-reasoner): that model reviews the transcript on its own, outside the author's framing.",
-      "default": ""
-    }
-  },
   "keywords": [
     "claude-code",
     "plugin",
-    "you-should-know",
+    "verification",
     "deepseek",
     "review"
   ],
