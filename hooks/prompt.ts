@@ -139,7 +139,7 @@ export type VerifyInput = {
 const READERS = new Set(['cat', 'head', 'tail', 'grep', 'rg', 'ls', 'wc', 'file', 'stat', 'find', 'diff', 'cmp', 'shasum', 'md5', 'sort', 'uniq', 'cut', 'tr', 'jq', 'echo', 'test', '['])
 // Only the first word of each piece is checked, so a second command on a new line
 // or after `&`, or one run inside another ($(…), `…`, <(…)), would get past it.
-const NESTED = /[\n\r`]|\$\(|<\(|(?<!&)&(?!&)/
+const NESTED = /[\n\r`]|\$\(|<\(|(?<![&>])&(?!&)/
 // The readers' own flags that write a file or run another program.
 const WRITING_FLAGS: Record<string, RegExp> = {
   find: /^-(?:exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
