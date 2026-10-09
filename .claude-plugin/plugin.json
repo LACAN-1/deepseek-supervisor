@@ -1,7 +1,7 @@
 {
   "name": "deepseek-supervisor",
-  "version": "0.4.0",
-  "description": "\"You should know\" for Claude Code on a third-party model such as DeepSeek: every few steps a side pass reviews the work and tells the model, and the person, what it notices",
+  "version": "0.6.0",
+  "description": "A check for Claude Code on a third-party model such as DeepSeek: when the model claims something is done, passing or right, a verifier runs the cheapest command that would show it false in a throwaway copy of the workspace, and hands the model the output",
   "author": {
     "name": "LACAN-1"
   },
@@ -10,7 +10,7 @@
   "keywords": [
     "claude-code",
     "plugin",
-    "you-should-know",
+    "verification",
     "deepseek",
     "review"
   ],
