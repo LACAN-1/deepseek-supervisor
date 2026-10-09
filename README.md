@@ -18,7 +18,7 @@ It was built for DeepSeek, but nothing in it is DeepSeek-specific: it works with
 
 **During the work.** Every 3 finished steps of the main loop (subagents' steps are not counted), code collects the sentences the model has written since the last check that claim something is so ("passes", "fixed", "verified", "correct", "done", "works", 通过, 修好, 正确, 完成…). If there are new ones, the verifier gets them, with your last prompt and a few facts code read from the tool calls (commands that failed, including a Traceback hidden behind `| tail`; images a tool wrote that nobody opened since; files the model wrote).
 
-**The verifier** is a short loop the plugin runs itself: a model proposes commands, they run in a clone of your workspace, their output goes back, for at most 6 rounds of at most 3 commands of 60 s each. It picks at most 3 claims worth checking and judges each *holds*, *false* or *unclear*. A *false* verdict must carry the command it ran and the output that contradicts the claim; one without them is dropped. The clone is made with `cp -c` (an APFS clone: no data copied) or a plain copy elsewhere, and removed afterwards. A command that names your real workspace is refused. If no clone can be made (your home folder, the root, a copy over 60 s), it runs read-only commands only.
+**The verifier** is a short loop the plugin runs itself: a model proposes commands, they run in a clone of your workspace, their output goes back, for at most 6 rounds of at most 3 commands of 60 s each. It picks at most 3 claims worth checking and judges each *holds*, *false* or *unclear*. A *false* verdict must carry the command it ran and the output that contradicts the claim; one without them is dropped. The clone is made with `cp -c` (an APFS clone: no data copied) and removed afterwards. A clone alone does not keep a script off your files (a project's scripts often write to absolute paths), so every command also runs under the macOS sandbox (`sandbox-exec`): nothing may be written under your home folder or the real workspace, only in the clone. A command that names your real workspace is refused. If no clone can be made (your home folder, the root, a copy over 60 s), or there is no sandbox (not macOS), it runs read-only commands only, and open items cannot close by their recheck.
 
 **What does not hold becomes a numbered item**, with the model's own words, the command, the output, and a *recheck*: a command that exits 0 exactly when the claim holds. It reaches the model as a note it reads at its next step, and you in a band above the prompt.
 
@@ -53,7 +53,7 @@ It read `shop.py`, fixed the slice, and reran the tests: `OK`, `exit=0`. That ch
 
 ## Requirements
 
-- Claude Code with plugin function hooks (`claude plugin validate` / `claude plugin test` exist). Developed on **2.1.290**; 0.6.0 tested on **2.1.293**. Needs `bash` and `cp`; tested on macOS.
+- Claude Code with plugin function hooks (`claude plugin validate` / `claude plugin test` exist). Developed on **2.1.290**; 0.6.0 tested on **2.1.293**. Needs `bash` and `cp`. Running checks in a clone needs macOS (`sandbox-exec`); elsewhere it runs read-only commands only.
 
 ## Install
 
@@ -86,7 +86,7 @@ The plugin's store is shared by every session on the machine. It keeps the on/of
 
 A check is a fresh request with no history: the claims, your prompt, the facts, and the command output so far. It does not re-read the session. In the run above, the check of the answer used about 1.7k input and 2k output tokens over 3 calls. Rechecks of open items run commands only and call no model. During the work the verifier calls a model at most 8 times per prompt of yours.
 
-Commands run on your machine, in the clone, with your environment: the project's own tests and scripts, as the model would run them.
+Commands run on your machine, in the clone and under the sandbox, with your environment: the project's own tests and scripts, as the model would run them, except that they cannot write outside the clone. Reading is not limited, and the network is not cut off.
 
 ## Known limits
 

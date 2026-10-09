@@ -97,15 +97,30 @@ const remember = async ($: EngineInterface, entry: Record<string, unknown>) => {
 // command passes through here (where it runs, what it may touch, what it cost),
 // nothing lands in the conversation but the note, and every wait is a `$` call,
 // so a hook that waits on it keeps its 10 s budget.
-const runIn = async ($: EngineInterface, command: string, cwd: string) => {
+const runIn = async ($: EngineInterface, command: string, cwd: string, box: string | undefined) => {
   const start = await $.clock.now()
   try {
-    const r = await $.process.run(['bash', '-c', command], { cwd, timeoutMs: COMMAND_MS })
+    const argv = box === undefined ? ['bash', '-c', command] : ['sandbox-exec', '-p', box, 'bash', '-c', command]
+    const r = await $.process.run(argv, { cwd, timeoutMs: COMMAND_MS })
     return { exitCode: r.exitCode as number | null, out: `${r.stdout}${r.stderr === '' ? '' : `\n[stderr]\n${r.stderr}`}`, ms: (await $.clock.now()) - start }
   } catch (err) {
     return { exitCode: null, out: `[did not finish: ${String(err)}]`, ms: (await $.clock.now()) - start }
   }
 }
+
+// The clone keeps a command's relative paths off the real files; it does not
+// keep off a script that writes to an absolute path (its own project's, or one
+// under the home folder). So every command runs under the macOS sandbox: nothing
+// may be written under the home folder or the real workspace, and in a clone,
+// only the clone may be. With no sandbox (not macOS), no clone is used and only
+// read-only commands run.
+const SANDBOX = '/usr/bin/sandbox-exec'
+const boxOf = (home: string, real: string, writable: readonly string[]) =>
+  [
+    '(version 1)(allow default)',
+    `(deny file-write* (subpath ${JSON.stringify(home)}) (subpath ${JSON.stringify(real)}))`,
+    ...(writable.length === 0 ? [] : [`(allow file-write* ${writable.map(w => `(subpath ${JSON.stringify(w)})`).join(' ')})`]),
+  ].join('')
 
 // A clone of the workspace (on APFS no data is copied), or nothing. The home
 // folder or the root is never copied; a copy that takes too long is given up.
@@ -141,15 +156,19 @@ const addCost = (cost: VerifyResult['cost'], u: { cache_read_input_tokens?: numb
  * settled by code first: exit 0 is fixed, whatever anyone says. Never rejects.
  */
 const verify = async ($: EngineInterface, input: VerifyInput): Promise<VerifyResult> => {
-  const copy = await copyOf($, input.cwd).catch(() => undefined)
+  const hasBox = (await $.process.run(['test', '-x', SANDBOX]).catch(() => undefined))?.exitCode === 0
+  const home = (await $.process.run(['bash', '-c', 'printf %s "$HOME"']).catch(() => undefined))?.stdout ?? ''
+  const copy = !hasBox || home === '' || input.cwd === '' ? undefined : await copyOf($, input.cwd).catch(() => undefined)
   const mode: Mode = copy === undefined ? 'read-only' : 'copy'
   const where = copy ?? input.cwd
+  const realCopy = copy === undefined ? undefined : (await $.process.run(['realpath', copy]).catch(() => undefined))?.stdout.trim() || copy
+  const box = !hasBox || home === '' ? undefined : boxOf(home, input.cwd, copy === undefined ? [] : [copy, realCopy ?? copy])
   const result: VerifyResult = { mode, probes: [], fixed: [], ran: [], cost: { cached: 0, input: 0, output: 0, calls: 0 } }
   try {
     // Rechecks run only in a copy: they are the project's own commands and may write.
     if (mode === 'copy') {
       for (const i of input.open.filter(i => (i.recheck ?? '') !== '')) {
-        const r = await runIn($, i.recheck ?? '', where)
+        const r = await runIn($, i.recheck ?? '', where, box)
         result.ran.push({ command: i.recheck ?? '', exitCode: r.exitCode, ms: r.ms })
         if (r.exitCode === 0) result.fixed.push({ id: i.id, saw: clip(squash(r.out), 300) || `\`${i.recheck}\` exited 0` })
       }
@@ -185,7 +204,7 @@ const verify = async ($: EngineInterface, input: VerifyInput): Promise<VerifyRes
           outputs.push(`$ ${command}\n[refused: ${no}]`)
           continue
         }
-        const r = await runIn($, command, where)
+        const r = await runIn($, command, where, box)
         result.ran.push({ command, exitCode: r.exitCode, ms: r.ms })
         outputs.push(`$ ${command}\n[exit ${r.exitCode ?? 'none'}]\n${shown(r.out)}`)
       }

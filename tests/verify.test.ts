@@ -31,11 +31,12 @@ const world = (on: Parameters<TestBody>[1], rows: Row[] = CLAIMED) => {
     verifier: [] as string[],
     commands: {} as Record<string, { exitCode: number; stdout: string }>,
     copyFails: false,
+    noSandbox: false,
     refuse: false,
     baseUrl: 'https://api.deepseek.com/anthropic' as string | undefined,
   }
   const asked: string[] = []
-  const ran: { command: string; cwd?: string }[] = []
+  const ran: { command: string; cwd?: string; box?: string }[] = []
   const removed: string[] = []
   const notes: string[] = []
   const submitted: string[] = []
@@ -66,10 +67,12 @@ const world = (on: Parameters<TestBody>[1], rows: Row[] = CLAIMED) => {
       removed.push(args.at(-1) ?? '')
       return res(0)
     }
-    const command = args[1] ?? ''
+    if (cmd === 'test') return res(state.noSandbox ? 1 : 0)
+    if (cmd === 'realpath') return res(0, `/private${args[0]}\n`)
+    const command = cmd === 'sandbox-exec' ? (args[4] ?? '') : (args[1] ?? '')
     if (command.startsWith('printf')) return res(0, '/Users/me')
     if (command.startsWith('cp -cR')) return res(state.copyFails ? 1 : 0)
-    ran.push({ command, cwd: e.init?.cwd })
+    ran.push({ command, cwd: e.init?.cwd, box: cmd === 'sandbox-exec' ? args[1] : undefined })
     const r = state.commands[command] ?? { exitCode: 0, stdout: '' }
     return res(r.exitCode, r.stdout)
   })
@@ -160,7 +163,9 @@ test('a new claim sends the verifier into a copy; what the output contradicts re
   expect(w.asked.length).toBe(2)
   expect(w.asked[0]).toContain('1. All tests pass.')
   expect(w.asked[0]).toContain('total() should add up every price')
-  expect(w.ran).toEqual([{ command: 'python3 -m unittest; echo "exit=$?"', cwd: COPY }])
+  expect(w.ran.map(r => [r.command, r.cwd])).toEqual([['python3 -m unittest; echo "exit=$?"', COPY]])
+  // Under the sandbox: nothing written under the home folder or the real workspace, only in the clone.
+  expect(w.ran[0]?.box).toBe(`(version 1)(allow default)(deny file-write* (subpath "/Users/me") (subpath "/p"))(allow file-write* (subpath "${COPY}") (subpath "/private${COPY}"))`)
   expect(w.removed).toEqual([COPY])
   expect(w.notes.length).toBe(1)
   expect(w.notes[0]).toContain('you wrote: All tests pass.')
@@ -251,7 +256,20 @@ test('with no copy, the verifier is told so and nothing that writes runs in the 
   await steps($, 3)
   await w.clock.advance(10)
   expect(w.asked[0]).toContain('No copy of the workspace could be made')
-  expect(w.ran).toEqual([{ command: 'grep -c def test_x.py', cwd: '/p' }])
+  expect(w.ran.map(r => [r.command, r.cwd])).toEqual([['grep -c def test_x.py', '/p']])
+  expect(w.ran[0]?.box).toBe('(version 1)(allow default)(deny file-write* (subpath "/Users/me") (subpath "/p"))')
+})
+
+test('with no sandbox to run under (not macOS), no clone is made and only read-only commands run', async ($, on) => {
+  const w = world(on)
+  w.state.noSandbox = true
+  w.state.verifier = [JSON.stringify({ run: ['python3 -m unittest', 'grep -c def test_x.py'] }), '{"checked": [], "items": []}']
+  await start($)
+  await steps($, 3)
+  await w.clock.advance(10)
+  expect(w.asked[0]).toContain('No copy of the workspace could be made')
+  expect(w.ran.map(r => [r.command, r.cwd, r.box])).toEqual([['grep -c def test_x.py', '/p', undefined]])
+  expect(w.removed).toEqual([])
 })
 
 test('the verifier calls a model at most 8 times per prompt of the person\'s during the work', async ($, on) => {
