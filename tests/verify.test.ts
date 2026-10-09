@@ -223,7 +223,11 @@ test('a recheck that names the real workspace is refused like any other command'
 })
 
 test('the claims of a turn\'s answer are checked when it ends; what does not hold comes back once as a prompt', async ($, on) => {
-  const w = world(on, [{ role: 'user', text: 'fix total()', toolUses: [] }])
+  // The record shows a passing run, so no rule settles the claim: the verifier does.
+  const w = world(on, [
+    { role: 'user', text: 'fix total()', toolUses: [] },
+    { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'r', tool: 'Bash', input: { command: 'python3 -m unittest' }, text: 'OK' }] },
+  ])
   w.state.verifier = [FALSE.replace('"claim":1', '"claim":2')]
   await start($)
   await prompt($, 'fix total()')
@@ -301,14 +305,15 @@ test('with no sandbox to run under (not macOS), no clone is made and only read-o
 test('the verifier calls a model at most 8 times per prompt of the person\'s during the work', async ($, on) => {
   const w = world(on)
   await start($)
+  // A session grows: each check reads the messages added since the last.
   for (let k = 0; k < 10; k++) {
-    w.state.rows = [...CLAIMED, { role: 'assistant', text: `Step ${k} done.`, toolUses: [] }]
+    w.state.rows = [...w.state.rows, { role: 'assistant', text: `Step ${k} done.`, toolUses: [] }]
     await steps($, 3)
     await w.clock.advance(10)
   }
   expect(w.asked.length).toBe(8)
   await prompt($, 'keep going')
-  w.state.rows = [...CLAIMED, { role: 'assistant', text: 'Step 11 done.', toolUses: [] }]
+  w.state.rows = [...w.state.rows, { role: 'assistant', text: 'Step 11 done.', toolUses: [] }]
   await steps($, 3)
   await w.clock.advance(10)
   expect(w.asked.length).toBe(9)
@@ -339,4 +344,72 @@ test('a note the session refuses is still in the band, and the person is told', 
   expect(w.toasts.at(-1)).toContain('did not reach the model')
   const drawn = await $.ui.mount({ plugin: 'deepseek-supervisor', surface: 'terminal', component: 'AbovePrompt', props: band } as never)
   expect(await drawn.find({ text: /One test fails/ })).toBeDefined()
+})
+
+// The rules on the session's own record: no model, any machine.
+const RAN_OK = { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'r1', tool: 'Bash', input: { command: 'python3 -m unittest' }, text: 'Ran 3 tests\n\nOK' }] }
+const EDITED = { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'e1', tool: 'Edit', input: { file_path: '/p/shop.py', old_string: 'a', new_string: 'b' }, text: 'ok' }] }
+
+test('with no sandbox, a pass claimed about code edited since is raised from the record alone, and closes when a run passes after the edit', async ($, on) => {
+  const w = world(on, [{ role: 'user', text: 'fix total()', toolUses: [] }, RAN_OK, EDITED, { role: 'assistant', text: 'Done, all tests pass.', toolUses: [] }])
+  w.state.noSandbox = true
+  await start($)
+  await steps($, 3)
+  await w.clock.advance(10)
+  // No model was asked: the record settled it.
+  expect(w.asked.length).toBe(0)
+  expect(w.notes.length).toBe(1)
+  expect(w.notes[0]).toContain('shop.py was edited after the last passing check')
+  expect(w.notes[0]).toContain('closes: when a check command passes after your last edit')
+  expect(await issues($)).toContain('[open]')
+
+  // The model reruns the tests after its edit: the item closes, whatever it says or does not.
+  w.state.rows = [...w.state.rows, { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'r2', tool: 'Bash', input: { command: 'python3 -m unittest' }, text: 'Ran 3 tests\n\nOK' }] }]
+  await steps($, 3)
+  await w.clock.advance(10)
+  const list = await issues($)
+  expect(list).toContain('[fixed]')
+  expect(list).toContain('passed after the last edit')
+  expect(w.asked.length).toBe(0)
+})
+
+test('a turn that ends saying the tests pass after they failed comes back as a prompt, from the record alone', async ($, on) => {
+  const failed = { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'r1', tool: 'Bash', input: { command: 'pytest -q 2>&1 | tail -1' }, text: '1 failed, 2 passed in 0.03s' }] }
+  const w = world(on, [{ role: 'user', text: 'fix total()', toolUses: [] }, failed])
+  w.state.noSandbox = true
+  await start($)
+  await prompt($, 'fix total()')
+  await end($, 'Fixed it. All tests pass.')
+  await w.clock.advance(10)
+  // "Fixed it." goes to the verifier; the claim the record already contradicts does not.
+  expect(w.asked.every(a => !a.includes('All tests pass'))).toBe(true)
+  expect(w.submitted.length).toBe(1)
+  expect(w.submitted[0]).toContain('The last check run failed')
+  expect(w.submitted[0]).toContain('1 failed, 2 passed')
+})
+
+test('what a command printed reaches the verifier with its credentials cut out', async ($, on) => {
+  const w = world(on)
+  w.state.verifier = [JSON.stringify({ run: ['cat settings.py'] })]
+  w.state.commands['cat settings.py'] = { exitCode: 0, stdout: 'DEBUG = True\nAPI_KEY = "sk-abcdefghijklmnopqrstuvwx"\n' }
+  await start($)
+  await steps($, 3)
+  await w.clock.advance(10)
+  expect(w.asked.length).toBe(2)
+  expect(w.asked[1]).toContain('DEBUG = True')
+  expect(w.asked[1]).not.toContain('sk-abcdefghijklmnop')
+})
+
+test('a file the model says it changed and never touched is raised from the record, through the whole check', async ($, on) => {
+  const w = world(on, [
+    { role: 'user', text: 'bump the version to 1.2 in version.txt and setup.cfg', toolUses: [] },
+    { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'e', tool: 'Edit', input: { file_path: '/p/version.txt', old_string: '1.1', new_string: '1.2' }, text: 'ok' }] },
+  ])
+  w.state.noSandbox = true
+  await start($)
+  await prompt($, 'bump the version to 1.2 in version.txt and setup.cfg')
+  await end($, 'Updated version.txt and setup.cfg to 1.2.')
+  await w.clock.advance(10)
+  expect(w.submitted.length).toBe(1)
+  expect(w.submitted[0]).toContain('setup.cfg is said to be changed, but no tool call touched')
 })

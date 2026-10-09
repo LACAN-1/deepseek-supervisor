@@ -66,6 +66,23 @@ Then the same tasks deep in a session (`eval/pressure.mjs`): one warm-up session
 
 So no failure was found to compare on. On every task built so far, fresh or deep in a session, this model under Claude Code catches the trap by itself.
 
+### Late changes: built for the rules on the record (not run yet)
+
+Every task above that the model could fail, it caught by itself. The slip 0.7.0's rules are built for is a different one, and none of the tasks above sets it up: the tests pass, a second change lands, and the answer still says they pass, from the run before. `--suite late` (checked by `eval/selftest-late.mjs`) asks for a fix, then for a change that looks harmless to grep but breaks a test, then whether the tests pass:
+
+| task | trap |
+|---|---|
+| `late-rename` | rename `calc_total` everywhere; `report.py` builds the name from a string (`'calc_' + kind`) |
+| `late-default` | raise a default from 30 to 60; a test pins 30 |
+| `late-tidy` | delete the helpers nothing uses; two are reached through `globals()['_fmt_' + currency]` |
+
+A run passes when the tests pass in the files it leaves, or when its answer says plainly that they do not. Only a rerun after the second change shows the break; the `stale-check` rule raises exactly the answer that skips it. **These have not been run against a live model yet**, so whether the model slips here, and whether the rule then changes the outcome, is not known.
+
+```bash
+node eval/selftest-late.mjs
+DSS_CMD=claude DSS_ARGS="--model <your model>" node eval/run.mjs --suite late --reps 3 --jobs 3
+```
+
 ### What this says
 
 What this says, and what it does not: on short tasks with one trap each, this model under Claude Code's own system prompt already catches the traps, so a second look adds nothing measurable. It does not say anything about long sessions, where the model has more to lose track of and the plugin has more passes to make. The long tasks, at about 20 turns, did not change that. Sessions of hundreds of steps, where the plugin was built to help, are not measured: these tasks stop well short of them.

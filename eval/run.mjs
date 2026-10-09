@@ -1,6 +1,6 @@
 // Runs each task with the plugin and without it, and scores the runs.
 //
-//   node eval/run.mjs [--suite short|long|hard] [--reps 2] [--jobs 4] [--tasks a,b] [--arms on,off] [--out eval/results]
+//   node eval/run.mjs [--suite short|long|hard|late] [--reps 2] [--jobs 4] [--tasks a,b] [--arms on,off] [--out eval/results]
 //
 // DSS_CMD is the command that starts Claude Code on your third-party endpoint
 // (default `claude`); DSS_ARGS is added after it, e.g. `--model sonnet`. Each run
@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { TASKS as SHORT } from './tasks.mjs'
 import { TASKS as LONG } from './tasks-long.mjs'
 import { TASKS as HARD } from './tasks-hard.mjs'
+import { TASKS as LATE } from './tasks-late.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const arg = (name, fallback) => {
@@ -32,7 +33,7 @@ const extra = process.env.DSS_ARGS ?? ''
 const TOOLS = 'Read,Write,Edit,Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(wc:*),Bash(head:*),Bash(tail:*),Bash(python3:*)'
 const LIMIT_MS = 20 * 60 * 1000
 
-const TASKS = { short: SHORT, long: LONG, hard: HARD }[arg('suite', 'short')]
+const TASKS = { short: SHORT, long: LONG, hard: HARD, late: LATE }[arg('suite', 'short')]
 const tasks = TASKS.filter(t => only === '' || only.split(',').includes(t.name))
 
 
@@ -98,11 +99,13 @@ const pluginStats = log => {
       }
     })
   const checks = json(/deepseek-supervisor: CHECK (\{.*\})/g)
-  const passes = [...log.matchAll(/\$\.model\.fork \(deepseek-supervisor\)/g)].length + checks.filter(c => c.claims > 0).length
+  const passes = [...log.matchAll(/\$\.model\.fork \(deepseek-supervisor\)/g)].length + checks.filter(c => c.claims > 0 || (c.rules?.length ?? 0) > 0).length
   const items = json(/deepseek-supervisor: WATCH (\{.*\})/g).reduce((n, w) => n + (w.fresh?.length ?? 0), 0) + checks.reduce((n, c) => n + (c.found?.length ?? 0), 0)
+  // 0.7.0: the items its rules on the record raised, with no model call.
+  const rules = checks.reduce((n, c) => n + (c.rules?.length ?? 0), 0)
   const forks = [...log.matchAll(/\[plugin_model_fork\] finished: .*?input=(\d+) output=(\d+) cacheRead=(\d+)/g)]
   const sum = k => forks.reduce((n, m) => n + Number(m[k]), 0)
-  return { passes, items, input: sum(1), output: sum(2), cached: sum(3) }
+  return { passes, items, rules, input: sum(1), output: sum(2), cached: sum(3) }
 }
 
 const once = ({ task, arm, rep }) =>
@@ -156,7 +159,7 @@ const once = ({ task, arm, rep }) =>
         answer,
       }
       writeFileSync(join(out, `${task.name}.${arm}.${rep}.json`), JSON.stringify(row, null, 1))
-      console.log(`${pass ? 'PASS' : 'fail'}  ${task.name.padEnd(22)}${caught === undefined ? '' : ` ${caught.filter(Boolean).length}/${caught.length}`} ${arm.padEnd(3)} #${rep}  ${row.seconds}s  turns=${row.turns}${row.plugin ? `  passes=${row.plugin.passes} items=${row.plugin.items}` : ''}`)
+      console.log(`${pass ? 'PASS' : 'fail'}  ${task.name.padEnd(22)}${caught === undefined ? '' : ` ${caught.filter(Boolean).length}/${caught.length}`} ${arm.padEnd(3)} #${rep}  ${row.seconds}s  turns=${row.turns}${row.plugin ? `  passes=${row.plugin.passes} items=${row.plugin.items} rules=${row.plugin.rules}` : ''}`)
       done(row)
     })
   })

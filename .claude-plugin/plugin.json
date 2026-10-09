@@ -1,6 +1,6 @@
 {
   "name": "deepseek-supervisor",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "A check for Claude Code on a third-party model such as DeepSeek: when the model claims something is done, passing or right, a verifier runs the cheapest command that would show it false in a throwaway copy of the workspace, and hands the model the output",
   "author": {
     "name": "LACAN-1"

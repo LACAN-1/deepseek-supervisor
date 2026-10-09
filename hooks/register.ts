@@ -3,8 +3,9 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Issue, Track } from '../types'
 import { registerBand } from './band'
+import { contradictions, evidenceOf, settledBy } from './evidence'
 import type { Facts, Mode, VerifyInput, VerifyResult } from './prompt'
-import { base, claimsOf, clip, COMMAND_MS, COPY_MS, factsOf, isSameItem, MODEL, noteText, parseTurn, refusal, ROUNDS, shown, squash, verifyPrompt } from './prompt'
+import { base, claimsOf, clip, COMMAND_MS, COPY_MS, factsOf, isSameItem, MODEL, noteText, parseTurn, redact, refusal, ROUNDS, shown, squash, verifyPrompt } from './prompt'
 
 // Claude Code's own "You should know" is hidden whenever ANTHROPIC_BASE_URL points
 // away from Anthropic (observed on 2.1.290: that one variable alone), so it never
@@ -102,7 +103,8 @@ const runIn = async ($: EngineInterface, command: string, cwd: string, box: stri
   try {
     const argv = box === undefined ? ['bash', '-c', command] : ['sandbox-exec', '-p', box, 'bash', '-c', command]
     const r = await $.process.run(argv, { cwd, timeoutMs: COMMAND_MS })
-    return { exitCode: r.exitCode as number | null, out: `${r.stdout}${r.stderr === '' ? '' : `\n[stderr]\n${r.stderr}`}`, ms: (await $.clock.now()) - start }
+    // Its output goes to the verifier's endpoint, a third party: credentials are cut out first.
+    return { exitCode: r.exitCode as number | null, out: redact(`${r.stdout}${r.stderr === '' ? '' : `\n[stderr]\n${r.stderr}`}`), ms: (await $.clock.now()) - start }
   } catch (err) {
     return { exitCode: null, out: `[did not finish: ${String(err)}]`, ms: (await $.clock.now()) - start }
   }
@@ -240,8 +242,8 @@ const TAG = /\[ysk#(\d+)\s+(told|refuted)\b[^\]]*\]/g
 
 type Rows = { role: string; text: string; toolUses?: readonly { tool: string; input: unknown; text?: string; result?: unknown; isError?: true }[] }[]
 
-// One check: the rule on images, the rechecks of open items, and the verifier on
-// `claims`. Settles what it can and returns the new items; the caller delivers them.
+// One check: the rules on the session's record and on images, the rechecks of open
+// items, and the verifier on `claims`. Settles what it can and returns the new items; the caller delivers them.
 const check = async ($: EngineInterface, claims: readonly string[], list: Rows, kind: 'during' | 'answer'): Promise<Issue[]> => {
   const at = await $.clock.now()
   const before = await read($, track)
@@ -250,7 +252,13 @@ const check = async ($: EngineInterface, claims: readonly string[], list: Rows, 
   // During the work the verifier runs at most RUNS_PER_PROMPT checks per
   // prompt; a turn's answer is always checked.
   const canRun = kind === 'answer' || (before.runs ?? 0) < RUNS_PER_PROMPT
-  const handed = canRun ? claims : []
+  // The session's own record against the claims first: no model, so no budget and
+  // no made-up evidence, and it works where no command may run. Only what the record
+  // still contradicts now is raised: a claim since made good is left alone. A claim
+  // the record already contradicts is not handed to the verifier as well.
+  const record = evidenceOf(list)
+  const contradicted = contradictions(record, claims).filter(f => settledBy(record, f.kind, f.probe) === undefined)
+  const handed = canRun ? claims.filter(c => !contradicted.some(f => f.quote === c)) : []
   const rechecks = open.some(i => (i.recheck ?? '') !== '')
   const stillUnopened = new Set(facts.unopened)
   const images = unopenedClaimed(facts, claims)
@@ -267,10 +275,22 @@ const check = async ($: EngineInterface, claims: readonly string[], list: Rows, 
       const f = v?.fixed.find(x => x.id === i.id)
       if (i.status !== 'open') return i
       if (f !== undefined) return { ...i, status: 'fixed' as const, settledAt: done, why: f.saw }
+      if (i.rule !== undefined) {
+        const why = settledBy(record, i.rule, i.probe)
+        return why === undefined ? i : { ...i, status: 'fixed' as const, settledAt: done, why }
+      }
       if (i.from === 'rule' && i.probe.startsWith('Read ') && !stillUnopened.has(i.probe.slice(5))) return { ...i, status: 'fixed' as const, settledAt: done, why: `${base(i.probe.slice(5))} was opened with Read` }
       return i
     })
     const fresh: Issue[] = []
+    // One open item per question: whether the checks pass is one, each untouched file another.
+    const isTestRule = (r: Issue['rule']) => r === 'failed-check' || r === 'stale-check' || r === 'no-check'
+    for (const f of contradicted) {
+      const all = [...issues, ...fresh]
+      if (all.some(i => i.status === 'open' && (isTestRule(f.kind) ? isTestRule(i.rule) : i.probe === f.probe))) continue
+      if (all.some(i => isSameItem({ quote: f.quote }, i))) continue
+      fresh.push({ id: t.nextId + fresh.length, at: done, from: 'rule', rule: f.kind, what: f.what, quote: f.quote, probe: f.probe, ...(f.recheck === '' ? {} : { recheck: f.recheck }), cost: 'the person will rely on work that was never shown to hold', status: 'open' })
+    }
     for (const p of (v?.probes ?? []).filter(p => p.verdict === 'false')) {
       if ([...issues, ...fresh].some(i => isSameItem({ quote: p.claim }, i))) continue
       fresh.push({ id: t.nextId + fresh.length, at: done, from: 'verify', what: p.what, quote: p.claim, probe: p.command, saw: p.saw, recheck: p.recheck, cost: 'the person will act on a claim the output contradicts', status: 'open' })
@@ -284,21 +304,22 @@ const check = async ($: EngineInterface, claims: readonly string[], list: Rows, 
     const ran = v !== undefined && v.cost.calls > 0 && kind === 'during'
     return { ...t, nextId: t.nextId + fresh.length, issues, seen: [...(t.seen ?? []), ...handed].slice(-SEEN_KEPT), runs: (t.runs ?? 0) + (ran ? 1 : 0) }
   })
-  if (v !== undefined)
+  if (v !== undefined || found.length > 0)
     await remember($, {
       at: done,
       kind,
-      mode: v.mode,
+      mode: v?.mode ?? null,
       claims: handed.length,
-      probes: v.probes.map(p => ({ claim: p.claim, command: p.command, verdict: p.verdict, saw: p.saw })),
-      fixed: v.fixed.map(f => f.id),
+      probes: (v?.probes ?? []).map(p => ({ claim: p.claim, command: p.command, verdict: p.verdict, saw: p.saw })),
+      fixed: (v?.fixed ?? []).map(f => f.id),
       found: found.map(i => i.id),
-      ran: v.ran,
-      reason: v.reason ?? null,
-      cost: v.cost,
+      rules: found.filter(i => i.rule !== undefined).map(i => ({ id: i.id, rule: i.rule, quote: i.quote })),
+      ran: v?.ran ?? [],
+      reason: v?.reason ?? null,
+      cost: v?.cost ?? { cached: 0, input: 0, output: 0, calls: 0 },
       ms: done - at,
     })
-  say($, `CHECK ${JSON.stringify({ kind, claims: handed.length, found: found.map(i => i.id), fixed: v?.fixed.map(f => f.id) ?? [], reason: v?.reason })}`)
+  say($, `CHECK ${JSON.stringify({ kind, claims: handed.length, found: found.map(i => i.id), rules: found.filter(i => i.rule !== undefined).map(i => `${i.id}:${i.rule}`), fixed: v?.fixed.map(f => f.id) ?? [], reason: v?.reason })}`)
   return found
 }
 
@@ -323,11 +344,17 @@ const tick = async ($: EngineInterface) => {
     steps = 0
     const rows = await $.session.messages().catch(() => undefined)
     const list = (Array.isArray(rows) ? rows : []) as Rows
+    // Only messages no earlier check read: an old claim pushed out of `seen` is not
+    // handed over again. A list shorter than before was compacted: read it all, and
+    // let `seen` hold back what was already checked.
+    const before = await read($, track)
+    const from = (before.scanned ?? 0) <= list.length ? (before.scanned ?? 0) : 0
     const claims = newClaims(
-      list.filter(r => r.role === 'assistant').map(r => r.text),
-      (await read($, track)).seen ?? [],
+      list.slice(from).filter(r => r.role === 'assistant').map(r => r.text),
+      before.seen ?? [],
     )
     const found = await check($, claims, list, 'during')
+    await update($, track, t => ({ ...t, scanned: list.length }))
     if (found.length === 0) return
     await showCards($, found)
     // Refused or failed, the items are still in the band: say so, so the person can pass them on.
@@ -395,7 +422,8 @@ export const register: Register = on => {
   // band aging as "You should know" cards do.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
-    if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') {
+    // The person's own: typed, from a phone, or the SDK host's turn (`claude -p`).
+    if (result.drop === undefined && (e.origin.kind === 'composer' || e.origin.kind === 'bridge' || e.origin.kind === 'sdk')) {
       asked = e.text
       followUps = 0
       await update($, track, t => ({ ...t, runs: 0 })).catch(() => undefined)
@@ -403,7 +431,7 @@ export const register: Register = on => {
       if (promptsSinceCards >= CLEAR_AFTER_PROMPTS) await update($, cards, () => null).catch(() => undefined)
     }
     return result
-  })
+  }).catch(($, e, next) => next(e))
 
   // The main loop's finished steps; a subagent's are its own.
   on('turn.step', async function* ($, e, next) {

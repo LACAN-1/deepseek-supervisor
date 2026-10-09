@@ -21,19 +21,19 @@
 |---|---|---|---|---|---|---|
 | 1 | 高 | `hooks/prompt.ts:140-147`（修复前） | 只读模式的命令过滤器能绕过，导致命令注入 | Linux 上验证者回复 `{"run":["cat a.py\npython3 evil.py"]}`，第二行会在真实工作区里不受限地执行。`cat a & python3 x`、`cat $(python3 x)`、`` cat `python3 x` ``、`cat <(python3 x)` 同样能执行；`find -execdir/-ok/-fprint/-fls`、`rg --pre`、`sort -o`、`sort --compress-program=PROG`、`uniq IN OUT`、`file -C` 都能写文件或执行程序，但第一个词都在白名单里 | **已修** edaaf75 / 7f97346 / 74c928e（合并后采用 7f97346 的实现） | **已验证**：先用 `node --experimental-strip-types` 直接调用 `refusal()`，修复前 9 种写法都返回 ALLOWED；新加的测试在旧代码上失败（15 pass / 1 fail），修复后通过；另一会话独立复现：12 种写法修复前全部 ALLOWED，`bash -c $'cat /dev/null\ntouch pwned'` 真的建出了 `pwned`；`sort \| uniq -c; echo "exit=$?"`、`test -f x && echo`、`uniq -f 2 a`、`rg --pre-glob` 仍然放行 |
 | 2 | 中 | `hooks/register.ts:118-123, 165`（修复前） | 沙箱只对 `input.cwd` 原样禁写，没有禁写它解析后的真实路径 | 工作区在 `/tmp/proj`（macOS 上实际是 `/private/tmp/proj`），或者工作区本身经过符号链接进入：sandbox-exec 按解析后的路径匹配，deny 规则匹配不上，项目脚本写绝对路径就能改到真实文件 | **已修** 55405cc / 2823592：cwd 和家目录都同时按原路径和 `realpath` 禁写（家目录本身是符号链接的情况较少，但修法相同） | **未验证**：Linux 上没有 sandbox-exec，无法实测。依据是作者已经因为同样的原因把克隆的 `realpath` 加进了 allow 规则（`register.ts:164`），能推翻这个判断的观察是「sandbox-exec 按未解析的路径匹配」，这个观察在这里做不了。这个修复只增加 deny 规则，不会放宽任何权限 |
-| 3 | 中 | `hooks/register.ts:22, 277, 297-300` | `seen` 只保留最近 200 条，而 `newClaims` 每次都扫描全部 assistant 消息。被挤出 `seen` 的旧声明会重新算作「新声明」 | 长会话里出现超过 200 条匹配声明的句子以后（`CLAIM` 正则很宽，"done""完成"都算），之后每次 tick 都会把 12 条旧声明重新交给验证者：8 次预算花在已经查过的旧话上，可能对早已过时的「All tests pass」开出新条目 | **未修**（修法要改「哪些消息已经扫过」的记录方式，会动 Track 结构，需要作者决定） | **已验证**：把 `newClaims` 和 seen 的更新逻辑原样复制出来，模拟 250 条消息、40 次 tick。第 30 次以后每次 tick 都交出 12 条，内容是 "Step 82 done." 这类旧声明 |
+| 3 | 中 | `hooks/register.ts:22, 277, 297-300` | `seen` 只保留最近 200 条，而 `newClaims` 每次都扫描全部 assistant 消息。被挤出 `seen` 的旧声明会重新算作「新声明」 | 长会话里出现超过 200 条匹配声明的句子以后（`CLAIM` 正则很宽，"done""完成"都算），之后每次 tick 都会把 12 条旧声明重新交给验证者：8 次预算花在已经查过的旧话上，可能对早已过时的「All tests pass」开出新条目 | **0.7.0 已修**：Track 新增 `scanned`，过程中的检查只读上次之后新增的消息；消息变少（压缩过）时从头读，由 `seen` 去重 | **已验证**：把 `newClaims` 和 seen 的更新逻辑原样复制出来，模拟 250 条消息、40 次 tick。第 30 次以后每次 tick 都交出 12 条，内容是 "Step 82 done." 这类旧声明 |
 | 4 | 中 | README.md:87、README.zh-CN.md:87、`register.ts:15-18`、`types/index.d.ts` Track.runs | 文档说「每次提示最多调用 8 次模型」，代码实际是每次提示最多 8 次**检查**，每次检查最多 6 次调用，加上重试最多 12 次 | 用户按 8 次调用估算成本，实际最坏是 96 次。现有测试的 mock 每次检查只调用一次模型，所以测试测不出这个差别 | **已修**（改的是文档，不是代码）8c661a3 | **已验证**：读 `register.ts:180-191`（每轮 1 次调用，加 1 次重试）和 `:276-277`（`runs` 每次检查只加 1） |
 | 5 | 中 | `eval/run.mjs` pluginStats | 只匹配 0.4.0 的日志格式（`$.model.fork`、`WATCH {fresh}`）；0.6.0 写的是 `CHECK {claims, found}` | 用当前版本跑 eval，"plugin got a look in" 一列和 passes/items 永远是 0，看起来像插件什么都没做 | **已修** 116510b（同时识别 CHECK 行；0.6.0 的 token 用量没写进 debug 日志，所以 token 一列仍然是 0，注释里已写明） | **已验证**：用构造的日志测试，0.6.0 的日志旧代码统计出 {0,0}，新代码统计出 {passes:2, items:3}；0.4.0 的日志新旧代码结果相同 |
 | 6 | 中 | README.md:21, 89；README.zh-CN.md:21, 89 | README 说「只能写克隆」，实际沙箱配置是 `(allow default)` 加禁写家目录和工作区 | `/tmp`、`/usr/local`、外接卷等都能写，README 说的范围比实际窄 | **已修** 8c661a3 | **已验证**：读 `boxOf` 生成的配置，和测试里断言的字符串一致 |
-| 7 | 中（设计问题） | `boxOf` / README「读取不受限」 | 读取完全不受限，命令输出又会发给第三方模型接口 | 验证者被项目文件里的文字引导，跑了 `cat ~/.ssh/id_rsa` 或 `env`，输出就进了发往 DeepSeek 的请求。提示词里只写了「不要抄进字段」，但发出去的 transcript 里本身就带着完整输出 | 未修（README 已经说明读取不受限，是否收紧由作者决定） | 未验证（要有真实模型才能复现，这是按代码路径推出来的：`register.ts:211` 把输出拼进 transcript，`:182` 把 transcript 发出去） |
+| 7 | 中（设计问题） | `boxOf` / README「读取不受限」 | 读取完全不受限，命令输出又会发给第三方模型接口 | 验证者被项目文件里的文字引导，跑了 `cat ~/.ssh/id_rsa` 或 `env`，输出就进了发往 DeepSeek 的请求。提示词里只写了「不要抄进字段」，但发出去的 transcript 里本身就带着完整输出 | **0.7.0 已缓解**：读 `~/.ssh`、`~/.aws`、`.env`、`$…KEY/TOKEN` 变量或导出环境的命令两种模式下都拒跑；命令输出离开本机前删掉密钥和令牌（`redact()`）。读取本身仍不受限 | 未验证（要有真实模型才能复现，这是按代码路径推出来的：`register.ts:211` 把输出拼进 transcript，`:182` 把 transcript 发出去） |
 | 8 | 低 | README「How an item closes / fixed」 vs `register.ts:176, 195` | README 说「只有 recheck 退出 0 才算 fixed，模型说了不算」。但在只读模式下（所有 Linux 机器都是），带 recheck 的条目也会交给验证者模型，凭它回复 `items[].status: fixed` 就能关闭 | Linux 用户看到的 fixed，其实是第二个模型的判断，不是命令的退出码 | 未修（代码显然是有意这么写的，`mode !== 'copy' \|\| …`；建议在 README 里说明这一点） | **已验证**：读 `register.ts:176` 的 toRecheck 条件，以及 `:195` 只要 id 在 toRecheck 里就接受 |
 | 9 | 低 | `prompt.ts:141` | 复制模式下用 `command.includes(real)` 判断命令有没有指向真实工作区：只按前缀匹配，有误伤，也很容易绕过 | `cat /Users/me/proj2/x` 在 real=`/Users/me/proj` 时会被拒（误伤）；`$OLDPWD`、`$HOME/proj`、`/Users/me/./proj` 都不会被拒。真正的保护靠沙箱，这一条只能起提示作用 | 未修 | **已验证**：直接调用 `refusal()`，`/Users/me/proj2/x` 被拒，`echo hi > "$OLDPWD/x"` 放行 |
 | 10 | 低 | `register.ts:103` vs `:117` | 判断有没有沙箱时检查的是 `/usr/bin/sandbox-exec`，真正执行时却按 PATH 去找 `sandbox-exec` | PATH 里有一个同名程序抢在前面时，执行的就不是系统沙箱 | 未修（改起来要同时改测试 mock 里的 `cmd === 'sandbox-exec'`，收益小） | 已验证（读代码） |
 | 11 | 低 | `copyOf`：`cp -R` | BSD `cp -R` 把符号链接原样复制成符号链接；克隆里如果有指向工作区外、家目录外的链接，往里写就会写到真实目标 | 项目里有 `data -> /Volumes/shared/data` 这样的链接，测试往 `data/` 写文件，会写到共享卷上 | 未修 | 未验证（macOS 上的行为，这里无法实测） |
 | 12 | 低 | `eval/README.md` | 描述的是 0.4.0 的行为（"the reviewer looks every 6 steps"），结果日期 2026-10-08，和 0.4.0 提交是同一天；0.6.0 的 `MIN_GAP` 是 3 | 读者会以为这些结果是 0.6.0 跑出来的 | 未修（结果怎么表述该由作者定） | 已验证：`git log` 的日期，以及 `register.ts:19` |
 | 14 | 中低 | `hooks/register.ts:170-174`（修复前） | 复查命令（recheck）也是验证者模型给的，但没经过 `refusal()`；README 说「命令里写了你真实工作区路径的，一律拒跑」 | recheck 写成 `cd /p && python3 -m unittest`，会在真实工作区里跑，条目按真实文件的状态关闭，写操作只靠 macOS 沙箱挡 | **已修** b6d61e7：先过 `refusal()`，被拒的记进 `ran`，条目保持 open | **已验证**：新测试在旧 `register.ts` 上失败（16 pass / 1 fail），修复后通过 |
-| 15 | 低 | `prompt.ts` 的 `>` 规则 | 只读模式拒绝所有含 `>` 的命令，包括 `2>&1`、`2>/dev/null` | 验证者常用的写法被拒，只读模式下能查的东西更少。只影响可用性，不影响安全 | 未修（放宽需要仔细设计） | **已验证**：`refusal('grep x a 2>/dev/null','read-only','/p')` 返回拒绝 |
-| 13 | 低 | README「It picks at most 3 claims」 | 这只是提示词里的要求，`parseTurn` 并不限制 `checked` 的条数 | 模型返回 10 条 false，就会一次开出 10 个条目 | 未修 | 已验证（读 `prompt.ts` parseTurn） |
+| 15 | 低 | `prompt.ts` 的 `>` 规则 | 只读模式拒绝所有含 `>` 的命令，包括 `2>&1`、`2>/dev/null` | 验证者常用的写法被拒，只读模式下能查的东西更少。只影响可用性，不影响安全 | **0.7.0 已修**：只放行不写文件的重定向（`N>&M`、`>/dev/null`），其余 `>` 照旧拒绝 | **已验证**：`refusal('grep x a 2>/dev/null','read-only','/p')` 返回拒绝 |
+| 13 | 低 | README「It picks at most 3 claims」 | 这只是提示词里的要求，`parseTurn` 并不限制 `checked` 的条数 | 模型返回 10 条 false，就会一次开出 10 个条目 | **0.7.0 已修**：`parseTurn` 最多保留 `CLAIMS_CHECKED`（3）条 | 已验证（读 `prompt.ts` parseTurn） |
 
 没有发现值得报告的风格问题，所以没有报。
 
@@ -81,3 +81,12 @@
 ## PR
 
 从 `cloud-review` 到 `main` 的 PR：https://github.com/LACAN-1/deepseek-supervisor/pull/1 （并行会话开的；本会话的提交经合并后也在里面）。没有合并。
+
+## 0.7.0 跟进
+
+上表第 3、7、13、15 条已在 0.7.0 处理（见各行状态）。另外：
+
+- 验证者答复的 JSON 解析改为逐个尝试平衡的 `{…}`，取最后一个合法的回合对象：答复前面先写了带花括号的思考文字，不再整条判为无法解析。
+- 交给模型的条目内容（模型原话、命令、输出）去掉控制字符和形似引擎标签的片段。
+- `prompt.submit` 钩子加了 `.catch`；`claude -p`（`sdk` 来源）的提示也会更新「用户问了什么」、重置预算和追加次数。
+- 新增不调模型的规则（`hooks/evidence.ts`）：测试失败却说通过、改代码后验证过期、没跑测试、说改了却没碰的文件。这类条目按会话记录关闭，Linux 上同样有效。

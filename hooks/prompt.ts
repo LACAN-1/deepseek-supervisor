@@ -15,6 +15,7 @@ import type { Issue } from '../types'
 export const MODEL = 'sonnet' // on a third-party endpoint, every alias maps to its own model
 export const ROUNDS = 6
 export const COMMANDS_PER_ROUND = 3
+export const CLAIMS_CHECKED = 3
 export const COMMAND_MS = 60_000
 export const COPY_MS = 60_000
 const OUTPUT_CHARS = 2500
@@ -30,7 +31,7 @@ export const leaves = (x: unknown): string[] =>
 // What the model says when it believes something is so. Wide on purpose: the
 // verifier picks which claims are worth a command, and most of these are not.
 export const CLAIM =
-  /通过|成功|已修|修好|修复|已验证|验证了|确认|没问题|无误|正确|完成|做完|搞定|一致|达标|符合|生效|\bpass(?:es|ed|ing)?\b|\bfixed\b|\bverified\b|\bconfirm(?:s|ed)?\b|\bworks?\b|\bworking\b|\bcorrect(?:ly)?\b|\bdone\b|\bcomplete[sd]?\b|\bsucce(?:ss|eds?|eded|ssful(?:ly)?)\b|\bmatch(?:es|ed)?\b|\blooks? (?:good|right|correct|fine)\b|✅|✓/i
+  /通过|成功|已修|修好|修复|已验证|验证了|确认|没问题|无误|正确|完成|做完|搞定|一致|达标|符合|生效|\bpass(?:es|ed|ing)?\b|\bfixed\b|\bverified\b|\bconfirm(?:s|ed)?\b|\bworks?\b|\bworking\b|\bcorrect(?:ly)?\b|\bdone\b|\bcomplete[sd]?\b|\bsucce(?:ss|eds?|eded|ssful(?:ly)?)\b|\bmatch(?:es|ed)?\b|\blooks? (?:good|right|correct|fine)\b|\b(?:updated|bumped|modified)\b|修改了|更新了|改好了|✅|✓/i
 
 /**
  * The sentences and lines of a text that claim something, each clipped, in order.
@@ -147,11 +148,19 @@ const WRITING_FLAGS: Record<string, RegExp> = {
   rg: /^--pre(?:=|$)/,
   file: /^(?:-[^-]*C|--compile)/,
 }
+// What a command's output would carry to the verifier's endpoint, a third party:
+// credentials. Refused in either mode; redact() below catches what gets through.
+const SECRET_PATH = /(?:^|[\s'"=:/~])(?:\.ssh|\.aws|\.gnupg|\.netrc|\.npmrc|\.pypirc|\.docker\/config\.json|\.kube|\.config\/(?:gh|gcloud)|id_(?:rsa|dsa|ecdsa|ed25519)|\.env(?:\.[\w-]+)?)(?=$|[\s'"/|;&)])/
+const SECRET_VAR = /\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)\w*/i
+const DUMPS_ENV = /(?:^|[|;&]\s*)(?:env|printenv|set|export -p|declare -x)\s*(?:$|[|;&])/
+// Redirects that write nothing: into /dev/null, or one stream into another.
+const HARMLESS_REDIRECT = /\d?>&\d|&?\d?>\s*\/dev\/null/g
 export const refusal = (command: string, mode: Mode, real: string): string | undefined => {
   if (real.length > 1 && command.includes(real)) return `names the real workspace (${real}); use paths relative to the copy`
+  if (SECRET_PATH.test(command) || SECRET_VAR.test(command) || DUMPS_ENV.test(command)) return 'reads credentials or the environment, whose values would be sent to the verifier\'s endpoint'
   if (mode === 'copy') return undefined
-  if (NESTED.test(command)) return 'read-only mode: one command line only, with no command inside another (newline, &, $(…), `…`, <(…))'
-  if (/>|\b(?:sed|perl)\s+-i|-delete\b|-exec\b|\brm\b|\bmv\b|\bcp\b|\btee\b/.test(command)) return 'read-only mode: no copy of the workspace could be made, so nothing that writes may run'
+  if (NESTED.test(command.replace(HARMLESS_REDIRECT, ''))) return 'read-only mode: one command line only, with no command inside another (newline, &, $(…), `…`, <(…))'
+  if (/>|\b(?:sed|perl)\s+-i|-delete\b|-exec\b|\brm\b|\bmv\b|\bcp\b|\btee\b/.test(command.replace(HARMLESS_REDIRECT, ''))) return 'read-only mode: no copy of the workspace could be made, so nothing that writes may run'
   for (const [word = '', ...args] of command.split(/\||&&|\|\||;/).map(p => p.trim().split(/\s+/))) {
     if (word === '') continue
     if (!READERS.has(word)) return `read-only mode: only ${[...READERS].join(', ')} may run, not ${word}`
@@ -162,6 +171,25 @@ export const refusal = (command: string, mode: Mode, real: string): string | und
   }
   return undefined
 }
+
+// Credentials a command printed anyway, before its output reaches a third party.
+const SECRETS: readonly [RegExp, string][] = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[redacted private key]'],
+  [/\b(?:sk|rk|pk)-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}/g, '[redacted key]'],
+  [/\bAKIA[0-9A-Z]{16}\b/g, '[redacted key]'],
+  [/\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{20,})/g, '[redacted token]'],
+  [/\bxox[abprs]-[\w-]{10,}/g, '[redacted token]'],
+  [/\bAIza[0-9A-Za-z_-]{35}\b/g, '[redacted key]'],
+  [/\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}/g, '[redacted token]'],
+  [/((?:api[_-]?key|secret|token|password|passwd|auth)[\w-]*["']?\s*[:=]\s*)(["']?)[^\s"',;]{6,}\2/gi, '$1$2[redacted]$2'],
+]
+export const redact = (s: string) => SECRETS.reduce((t, [re, to]) => t.replace(re, to), s)
+
+// What reaches the model as a user-role row comes from command output and a project
+// that may hold anything: keep it plain text. No control characters, and nothing
+// shaped like the tags the engine itself injects (<system-reminder>).
+export const sanitize = (s: string) =>
+  s.replace(/[\u0000-\u0008\u000b-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '').replace(/<(\/?[A-Za-z][\w:-]*)([^<>]*)>/g, '‹$1$2›')
 
 export const shown = (out: string) => (out.length > OUTPUT_CHARS ? `${out.slice(0, OUTPUT_CHARS / 2)}\n…[${out.length - OUTPUT_CHARS} chars cut]…\n${out.slice(-OUTPUT_CHARS / 2)}` : out)
 
@@ -183,7 +211,7 @@ export const verifyPrompt = (input: VerifyInput, mode: Mode, toRecheck: readonly
       : ['', '## Earlier items still open, with no command that settles them: check whether each still holds', ...toRecheck.map(i => `#${i.id} the assistant wrote: ${i.quote}\n   found then: ${i.what}`)]),
     '',
     '## How',
-    '- Pick at most 3 claims that matter: ones the person will act on, which a command can show false. Skip plans, intentions, and claims about things outside the workspace.',
+    `- Pick at most ${CLAIMS_CHECKED} claims that matter: ones the person will act on, which a command can show false. Skip plans, intentions, and claims about things outside the workspace.`,
     "- For each, run the cheapest command that would show it false. Never trust the assistant's account of an output: run it again.",
     '- Do not let a pipe hide a failure: `cmd 2>&1 | tail -5` loses the exit code; append `; echo "exit=$?"` to the command instead.',
     '- You cannot see images. Check one with code (its size, pixel values via python3) or call the claim unclear.',
@@ -197,16 +225,40 @@ export const verifyPrompt = (input: VerifyInput, mode: Mode, toRecheck: readonly
     'Never copy secrets, credentials, tokens or keys into any field.',
   ].join('\n')
 
-const objectIn = (text: string): Record<string, unknown> | null => {
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start === -1 || end <= start) return null
-  try {
-    const raw: unknown = JSON.parse(text.slice(start, end + 1))
-    return typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : null
-  } catch {
-    return null
+// Every balanced {...} in the text, strings respected. A model may wrap its JSON in
+// fences or a sentence, or think aloud with braces before it.
+const objects = (text: string): string[] => {
+  const found: string[] = []
+  for (let start = text.indexOf('{'); start !== -1; start = text.indexOf('{', start + 1)) {
+    let depth = 0
+    let inString = false
+    for (let i = start; i < text.length; i++) {
+      const c = text[i]
+      if (inString) {
+        if (c === '\\') i++
+        else if (c === '"') inString = false
+      } else if (c === '"') inString = true
+      else if (c === '{') depth++
+      else if (c === '}' && --depth === 0) {
+        found.push(text.slice(start, i + 1))
+        break
+      }
+    }
   }
+  return found
+}
+
+// The last object that is a turn: the answer comes after any thinking aloud.
+const objectIn = (text: string): Record<string, unknown> | null => {
+  for (const candidate of objects(text).reverse()) {
+    try {
+      const raw: unknown = JSON.parse(candidate)
+      if (typeof raw === 'object' && raw !== null && ('run' in raw || 'checked' in raw)) return raw as Record<string, unknown>
+    } catch {
+      // not this one
+    }
+  }
+  return null
 }
 
 const str = (o: Record<string, unknown>, k: string, n = 400) => (typeof o[k] === 'string' ? clip((o[k] as string).trim(), n) : '')
@@ -227,6 +279,8 @@ export const parseTurn = (text: string, claims: readonly string[]): Turn => {
     })
     // A false verdict with no output behind it is an opinion: not kept.
     .filter(p => p.claim !== '' && (p.verdict !== 'false' || (p.saw !== '' && p.command !== '' && p.what !== '')))
+    // The prompt asks for at most CLAIMS_CHECKED; a reply that lists more does not open more items.
+    .slice(0, CLAIMS_CHECKED)
   const items = rows(raw.items)
     .map(x => ({ id: Number(x.id), status: x.status === 'fixed' ? ('fixed' as const) : ('open' as const), saw: str(x, 'saw') }))
     .filter(x => Number.isInteger(x.id))
@@ -245,8 +299,9 @@ export const isSameItem = (a: { quote: string }, b: { quote: string }) => {
 
 // One item as the model reads it: its own words, the command, what it printed,
 // and how the item closes.
-export const itemText = (i: Issue) =>
-  i.from === 'verify'
+export const itemText = (raw: Issue) => {
+  const i = { ...raw, what: sanitize(raw.what), quote: sanitize(raw.quote), probe: sanitize(raw.probe), saw: raw.saw === undefined ? undefined : sanitize(raw.saw) }
+  return i.from === 'verify'
     ? [
         `#${i.id} ${i.what}`,
         `   you wrote: ${i.quote}`,
@@ -254,7 +309,15 @@ export const itemText = (i: Issue) =>
         `   saw: ${i.saw ?? ''}`,
         (i.recheck ?? '') === '' ? '   closes: when fixed and shown, or told to the person' : `   closes: when \`${i.recheck}\` exits 0 (the check reruns it itself)`,
       ].join('\n')
-    : `#${i.id} ${i.what}\n   you wrote: ${i.quote}\n   check: ${i.probe}`
+    : [
+        `#${i.id} ${i.what}`,
+        `   you wrote: ${i.quote}`,
+        `   check: ${i.probe}`,
+        ...(i.rule === 'failed-check' || i.rule === 'stale-check' || i.rule === 'no-check'
+          ? ['   closes: when a check command passes after your last edit to code (read from the session; saying so does not close it)']
+          : []),
+      ].join('\n')
+}
 
 export const noteText = (issues: readonly Issue[]) =>
   [

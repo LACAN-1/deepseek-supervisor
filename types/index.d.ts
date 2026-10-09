@@ -18,6 +18,12 @@ export type Issue = {
   at: number
   /** Which check raised it: the verifier (a command's output contradicted the model) or a rule in code. */
   from: 'verify' | 'rule'
+  /**
+   * For a rule on the session's own record: which. `failed-check`, `stale-check`,
+   * `no-check`: a pass claimed against a failed run, against code edited since, or
+   * with no run at all; `untouched`: a file said to be changed that no tool call named.
+   */
+  rule?: 'failed-check' | 'stale-check' | 'no-check' | 'untouched'
   /** What is actually so, in one plain sentence; never how to fix it. */
   what: string
   /** The model's own words the item is about. */
@@ -43,6 +49,8 @@ export type Track = {
   issues: Issue[]
   /** The model's claims already handed to the verifier, so none is checked twice. */
   seen: string[]
+  /** How many of the session's messages the checks during the work have read: older ones are not read again. */
+  scanned?: number
   /** How many checks during the work called a model since the person's last prompt (each may make several calls). */
   runs: number
 }
