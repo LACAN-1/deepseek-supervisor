@@ -115,10 +115,10 @@ const runIn = async ($: EngineInterface, command: string, cwd: string, box: stri
 // only the clone may be. With no sandbox (not macOS), no clone is used and only
 // read-only commands run.
 const SANDBOX = '/usr/bin/sandbox-exec'
-const boxOf = (home: string, real: string, writable: readonly string[]) =>
+const boxOf = (denied: readonly string[], writable: readonly string[]) =>
   [
     '(version 1)(allow default)',
-    `(deny file-write* (subpath ${JSON.stringify(home)}) (subpath ${JSON.stringify(real)}))`,
+    `(deny file-write* ${denied.map(d => `(subpath ${JSON.stringify(d)})`).join(' ')})`,
     ...(writable.length === 0 ? [] : [`(allow file-write* ${writable.map(w => `(subpath ${JSON.stringify(w)})`).join(' ')})`]),
   ].join('')
 
@@ -161,8 +161,10 @@ const verify = async ($: EngineInterface, input: VerifyInput): Promise<VerifyRes
   const copy = !hasBox || home === '' || input.cwd === '' ? undefined : await copyOf($, input.cwd).catch(() => undefined)
   const mode: Mode = copy === undefined ? 'read-only' : 'copy'
   const where = copy ?? input.cwd
-  const realCopy = copy === undefined ? undefined : (await $.process.run(['realpath', copy]).catch(() => undefined))?.stdout.trim() || copy
-  const box = !hasBox || home === '' ? undefined : boxOf(home, input.cwd, copy === undefined ? [] : [copy, realCopy ?? copy])
+  // The sandbox matches resolved paths (/tmp is /private/tmp on macOS), so every
+  // path goes in both as given and resolved.
+  const both = async (p: string) => p === '' ? [] : [...new Set([p, (await $.process.run(['realpath', p]).catch(() => undefined))?.stdout.trim() || p])]
+  const box = !hasBox || home === '' ? undefined : boxOf([...(await both(home)), ...(await both(input.cwd))], copy === undefined ? [] : await both(copy))
   const result: VerifyResult = { mode, probes: [], fixed: [], ran: [], cost: { cached: 0, input: 0, output: 0, calls: 0 } }
   try {
     // Rechecks run only in a copy: they are the project's own commands and may write.

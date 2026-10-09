@@ -173,7 +173,7 @@ test('a new claim sends the verifier into a copy; what the output contradicts re
   expect(w.asked[0]).toContain('total() should add up every price')
   expect(w.ran.map(r => [r.command, r.cwd])).toEqual([['python3 -m unittest; echo "exit=$?"', COPY]])
   // Under the sandbox: nothing written under the home folder or the real workspace, only in the clone.
-  expect(w.ran[0]?.box).toBe(`(version 1)(allow default)(deny file-write* (subpath "/Users/me") (subpath "/p"))(allow file-write* (subpath "${COPY}") (subpath "/private${COPY}"))`)
+  expect(w.ran[0]?.box).toBe(`(version 1)(allow default)(deny file-write* (subpath "/Users/me") (subpath "/private/Users/me") (subpath "/p") (subpath "/private/p"))(allow file-write* (subpath "${COPY}") (subpath "/private${COPY}"))`)
   expect(w.removed).toEqual([COPY])
   expect(w.notes.length).toBe(1)
   expect(w.notes[0]).toContain('you wrote: All tests pass.')
@@ -265,7 +265,7 @@ test('with no copy, the verifier is told so and nothing that writes runs in the 
   await w.clock.advance(10)
   expect(w.asked[0]).toContain('No copy of the workspace could be made')
   expect(w.ran.map(r => [r.command, r.cwd])).toEqual([['grep -c def test_x.py', '/p']])
-  expect(w.ran[0]?.box).toBe('(version 1)(allow default)(deny file-write* (subpath "/Users/me") (subpath "/p"))')
+  expect(w.ran[0]?.box).toBe('(version 1)(allow default)(deny file-write* (subpath "/Users/me") (subpath "/private/Users/me") (subpath "/p") (subpath "/private/p"))')
 })
 
 test('with no sandbox to run under (not macOS), no clone is made and only read-only commands run', async ($, on) => {
