@@ -77,3 +77,7 @@
 - 合并提交：把两个会话的工作合到一起（普通 merge，不是 force push）
 
 没有改 LICENSE、版本号和 main。
+
+## PR
+
+从 `cloud-review` 到 `main` 的 PR：https://github.com/LACAN-1/deepseek-supervisor/pull/1 （并行会话开的；本会话的提交经合并后也在里面）。没有合并。
